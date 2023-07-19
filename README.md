@@ -1,1 +1,1 @@
-The repository provides analysis scripts and data used for the paper entitled "Philopatry Influences the Genetic Population Structure of the Blacktip Shark (Carcharhinus limbatus) at Multiple Spatial Scales"
+This repository provides analysis scripts and data used for the paper entitled "Philopatry Influences the Genetic Population Structure of the Blacktip Shark (Carcharhinus limbatus) at Multiple Spatial Scales"
