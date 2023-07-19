@@ -1,0 +1,866 @@
+---
+title: "FST Outlier: YOY Blacktips in US. Waters"
+author: "DG Swift"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+  
+# Environment
+  
+```{r, message=FALSE}
+
+.libPaths("/usr/lib64/R/library")
+
+# invalidate cache when the package version changes
+
+knitr::opts_chunk$set(
+  root.dir = "~/Projects/us_blacktips/fst_outlier/",
+	message = FALSE,
+	warning = FALSE,
+	cache.extra = packageVersion("tint"),
+	tidy = FALSE,
+	echo = FALSE)
+
+options(htmltools.dir.version = FALSE)
+
+# conflicts
+
+library(conflicted)
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("s.label", "adegraphics")
+conflict_prefer("s.value", "adegraphics")
+conflict_prefer("scalebar", "raster")
+conflict_prefer("rename", "dplyr")
+
+# packages
+
+library(tidyverse)
+library(here)
+library(stringr)
+library(OutFLANK)
+library(viridis)
+library(fsthet)
+library(hierfstat)
+library(SuppDists)
+library(lattice)
+library(qvalue)
+library(adegenet)
+library(sp)
+library(pegas)
+library(readGenalex)
+library(ggthemes)
+library(viridis)
+library(fsthet)
+library(UpSetR)
+library(coda)
+library(RColorBrewer)
+library(pcadapt)
+library(viridis)
+
+# source functions
+
+source("~/code/ggplot.R")
+source("~/code/genind.R")
+source("~/code/PCA.R")
+source("~/code/DAPC.R")
+
+`%not in%` <- function (x, table) is.na(match(x, table, nomatch=NA_integer_))
+
+# orders, colors, shapes
+
+yoy_strata <- read_csv(here("yoy_strata.csv"))
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+site_col <- c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF33")
+
+region_col <- c('#1b9e77','#d95f02','#7570b3')
+
+region_shape <- c(21, 23, 24)
+
+site_shape <- c(21, 21, 21, 23, 23, 23, 23, 24, 24, 24, 24)
+
+```
+
+# Model-based Methods
+
+## BayeScan
+
+BayeScan uses differences in allele frequencies between populations to identify F<sub>ST</sub> outlier loci. The null model (distribution of F<sub>ST</sub> for neutral loci) is generated based on the multinominal-Dirichlet model (island model) which assumes allele frequencies of subpopulations are correlated through a common migrant gene pool from which they differ to varying degrees. This difference is measured by a subpopulation-specific F<sub>ST</sub> coefficient. This model can incorporate ecologically realistic scenarios and is a robust method even with differing effective sizes and migration rates per subpopulation.
+
+Selection is introduced by decomposing population-specific F<sub>ST</sub> coefficients into population-specific component (beta), shared by all loci, and locus-specific component (alpha), shared by all populations using logistic regression. If the locus-specific component is necessary to explain the observed pattern of diversity (i.e. alpha significantly differs from 0), departure from neutrality is inferred.
+
+BayeScan calculates the posterior probability for the model, including selection, using Bayes factors. Multiple testing is needed to incorporate identifying loci under selection by chance. The posterior odds are calculated to make a decision (instead of Bayes factor) on whether loci are outliers. Posterior odds are calculated as the ratio of posterior probabilities indicating how much more likely the model with selection is compared to the neutral model. Posterior probabilities can be used to directly control the false discovery rate. The q-value of each locus indicates the minimum FDR at which this locus may become significant (e.g. q-value > 0.05 means that 5% of corresponding outlier markers are expected to be false positives).
+
+List of loci in dataset.
+
+```{r}
+
+loci <- as.data.frame(t(read_delim(here("yoy_site.gen"), delim = ",", col_names = FALSE,
+                                   skip = 1, n_max = 1)))
+
+colnames(loci) <- "LOCUS"
+
+```
+
+Prior odds for the neutral model are determined using `-pr_odds` and indicate how much more likely the neutral model is compared to the model of selection. Prior odds of 10 indicate the neutral mode is 10x more likely. The test of selection becomes more conservative with increasing prior odds. For large number datasets (many loci, individuals, and populations) the prior odds should have little influence on the results, but for realistic datasets (<20 populations), the choice of prior odds can have strong effects and should be adjusted based on the number of loci included in the dataset. For < 1000 loci, prior odds of 10 is reasonable. For larger datasets (1000 to 10,000 loci), prior odds of 100 are more appropriate. 
+
+Short, successive pilot runs (`-nbp`) are used to adjust acceptance rates between 0.25-0.45 (`-pilot` determines iterations). Choose a proposal distribution for reversible jumps by estimating mean and variance for all alphas under the saturated model (containing all alpha parameters), which is close to full conditional distribution and generally creates conservative enough parameters to ensure convergence. 
+
+Sample size (`-n`) corresponds to the number of iterations the program will use for estimation of parameters after the initial burn in (`-burn`). The thinning interval (`-thin`) is the number of intervals between two samples. This reduces autocorrelation from data generated using Markov chain. The total number of iterations is the sample size x thinning intervals plus the burn in.
+
+```{bash, eval = FALSE}
+
+cd /home/dswift/Projects/us_blacktips/fst_outlier/data
+
+bayescan_2.1 yoy_site_bs.txt -od . -o pr1k_burn200k_n35k_thin50 -all_trace -threads 15 -n 35000 -thin 50 -nbp 25 -pilot 5000 -burn 200000 -pr_odds 1000 -out_pilot -out_freq
+
+
+```
+
+Check parameters and evaluate convergence of the run.
+
+```{r}
+
+read_lines(here("fst_outlier", "data", "pr1k_burn200k_n35k_thin50_Verif.txt"), skip = 3, n_max = 11)
+
+```
+
+Plot posterior distributions. The full output of the MCMC algorithm is in `*.sel`. Each line corresponds to an iteration of the MCMC algorithm where columns contain an iteration index, log-likelihood, F<sub>ST</sub> coefficient for every population, and alpha coefficients for every locus.
+
+Counting the null values of alpha gives the posterior probability for the neutral model; this is only written out if the `-all_trace` flag is enabled).
+
+```{r}
+
+# Number of groups
+
+p <- 11
+
+# Vector of Fst values calc
+
+p <- c(1:p)
+p <- paste("fst", p, sep = "")
+
+# Number of loci
+
+l <- 4339
+
+# Vector of Fst values calc
+
+l <- c(1:l)
+l <- paste("alpha", l, sep = "")
+
+# Column names
+
+c <- c("iteration", "logL", p, l)
+
+# Read chain data
+
+sel <- read_table2(here("fst_outlier", "data", "pr1k_burn200k_n35k_thin50.sel"), skip = 1, col_names = c, col_types = cols(.default = "n")) %>%
+  rename(BLB = fst1) %>%
+  rename(SHS = fst2) %>%
+  rename(PRS = fst3) %>%
+  rename(TCB = fst4) %>%
+  rename(WAB = fst5) %>%
+  rename(APB = fst6) %>%
+  rename(MOB = fst7) %>%
+  rename(GAB = fst8) %>%
+  rename(MAB = fst9) %>%
+  rename(SAB = fst10) %>%
+  rename(CCB = fst11)
+
+```
+
+Trace likelihoods over iterations
+
+```{r fig.height=4, fig.width=12}
+
+mean <- mean(sel$logL)
+std <- sd(sel$logL)
+
+# Plot likelihood logL
+
+ggplot(sel, aes(x = iteration, y = logL)) +
+  geom_line(color = "darkblue") +
+  geom_hline(yintercept = (mean+std), color = "red", linetype = "dotted", size = 1) +
+  geom_hline(yintercept = mean, color = "red", linetype = "dashed", size = 1) +
+  geom_hline(yintercept = (mean-std), color = "red", linetype = "dotted", size = 1) +
+  labs(x = "iteration", y = "log Likelihood") +
+  theme_standard
+
+```
+
+Trace values of F<sub>ST</sub> over iterations.
+
+```{r fig.height=5, fig.width=7}
+
+library(coda)
+
+temp <- sel %>%
+  select(c(iteration, BLB, SHS, PRS, TCB, WAB, APB, MOB, GAB, MAB, SAB, CCB)) %>%
+  gather(site, value, 2:12, -iteration) %>%
+  mutate(site = ordered(site, levels = site_order_shrt))
+
+# Recreate an MCMC object with the correct thinning interval
+
+chain <- mcmc(sel, thin = 50)
+
+str(chain)
+
+# Plot library-specific Fst coefficients
+
+ggplot() +
+  geom_point(data = temp, aes(x = iteration, y = value, colour = site), size = 1, alpha = 0.5) +
+  labs(x = "Iteration", y = "Mean Fst Per Site") +
+  scale_color_manual(values = site_col) +
+  guides(colour = guide_legend(override.aes = list(size = 5, alpha = 1))) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12))
+
+```
+
+Verify that sample size used to estimate posteriors is sufficiently large. Effective sample size to estimate parameters can be smaller than value used for BayeScan run (35,000). MCMC explores the parameter space by moving in small steps. Therefore, two consecutive values will be strongly correlated; used thinning interval of 50 to reduce autocorrelation. 
+
+Check correlation between sampled parameter values for thinned chains used to estimate posterior probability. Effective sample size will be smaller than value used for BayeScan run (35,000) if there is some correlation.
+
+```{r fig.height=6, fig.width=4}
+
+eff <- as.data.frame(effectiveSize(chain)) %>%
+  rename(effSize = `effectiveSize(chain)`) %>%
+  rownames_to_column("parameter") %>%
+  mutate(paramtype = ifelse(grepl("fst", parameter), "fst",
+                                   ifelse(grepl("alpha", parameter), "alpha",
+                                          ifelse(grepl("logL", parameter), "likelihood",
+                                                 "other")))) %>%
+ filter(paramtype != "other")
+
+ggplot(eff, aes(x = effSize)) +
+  geom_histogram(binwidth = 1000, color = "black", fill = "darkgrey") +
+  geom_vline(xintercept = 35000, color = "red", linetype = "dashed") +
+  facet_grid(paramtype ~ . , scales = "free") +
+  theme_standard
+
+```
+
+Effective size of the likelihood sample should be smaller than the input value of 35,000. F<sub>ST</sub> parameters are less affected by correlation because correlation decreases more rapidly for F<sub>ST</sub> values than for likelihood values. 
+
+#### Test for Convergence
+
+Test for non-convergence of chains using Geweke's convergence diagnostic which compares the means of the first and last parts of the MC and reports the z-scores for each parameter.
+
+For Î± = 0.05, the critical values of z are â 1.96 and +1.96, i.e. if z values fall within those boundaries indicative of equality of means and therefore convergence of MCMC. On the otherhand z < -1.96 or z > 1.96 null hypothesis of  equality of means should be rejected.
+
+```{r fig.height=6, fig.width=4}
+
+geweke <- geweke.diag(chain, frac1 = 0.1, frac2 = 0.5)
+
+z <- as.data.frame(geweke$z) %>%
+ rename(z = `geweke$z`) %>%
+  rownames_to_column("parameter") %>%
+ mutate(paramtype = ifelse(grepl("fst", parameter), "fst",
+                                   ifelse(grepl("alpha", parameter), "alpha",
+                                          ifelse(grepl("logL", parameter), "likelihood", "other")))) %>%
+ filter(paramtype != "other")
+
+ggplot(z, aes(x = z)) +
+  geom_histogram(color = "black", fill = "darkgrey") +
+  geom_vline(xintercept = -1.96, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 1.96, color = "red", linetype = "dashed") +
+  facet_grid(paramtype ~ . , scales = "free") +
+  theme_standard
+
+```
+
+Results of pilot runs are in `*_prop.txt`. Acceptance rates for different model parameters are in `*_AccRte.txt`, alle frequencies (posterior mean) for each locus and grouping are in `*_freq.txt`.
+
+Compare F<sub>ST</sub>, Alpha, and q-values.
+
+The file `_fst.txt` contains one locus per row (first column). Columns 2-4 correspond to posterior probability for the model: including selection (`prob`), log10 of posterior odds for the model including selection (`log10PO`), q-value for the model including selection (`qval`). These are related to the test of local adaptation, i.e. the mode including locus-specific effect alpha.
+
+The fifth column is estimated locus-specific effect alpha (`alpha`) which indicates the strength and direction, where positive values indicate diversifying selection. The final column is the locus-specific F<sub>ST</sub> coefficient averaged over populations (`fst`). 
+
+Use the q-value to determine if a locus is a good candidate for a locus being under the influence of selection.
+
+```{r message=FALSE, warning=FALSE}
+
+fst <- read_table2(here("fst_outlier", "data", "pr1k_burn200k_n35k_thin50_fst.txt"),
+                   skip = 1, col_names = c("temp", "prob", "log10PO", "qval", "alpha", "fst")) %>%
+  select(-temp) %>%
+  mutate(log10q = log10(qval))
+
+fst <- bind_cols(loci, fst)
+
+count(fst, qval <= 0.05)
+count(fst, qval <= 0.01)
+count(fst, qval <= 0.001)
+
+```
+
+Distribution of q-values
+
+```{r fig.height=5, fig.width=5}
+
+ggplot(fst, aes(x = qval)) +
+  geom_histogram(binwidth = 0.025, color = "black", fill = "darkgrey") +
+  geom_vline(xintercept = (0.05), color = "red", linetype = "dashed") +
+  scale_y_sqrt() +
+  labs(x = "q-value", y = "Sqrt of Number of Loci") +
+  theme_standard
+
+```
+
+Distribution of Estimated F<sub>ST</sub> and Locus-specific Alpha Component.
+
+*Alpha = 0: no selection
+*Alpha > 0: positive selection
+*Alpha < 0: balancing selection
+
+```{r fig.height=5, fig.width=5}
+
+ggplot(fst, aes(x = alpha)) +
+  geom_histogram(color = "black", fill = "darkgrey") +
+  geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
+  scale_y_sqrt() +
+  labs(x = "Alpha", y = "Sqrt Number of Loci") +
+  theme_standard
+
+ggplot(fst, aes(x = fst)) +
+  geom_histogram(color = "black", fill = "darkgrey") +
+  scale_y_sqrt() +
+  labs(x = "Fst", y = "Sqrt Number of Loci") +
+  theme_standard
+
+ggplot(fst, aes(x = alpha, y = fst)) +
+  geom_point(shape = 1, size = 2) +
+  geom_smooth(color = "darkblue", linetype = "dashed") +
+  geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Locus-specific Effect Alpha", y = "Mean Fst per Locus") +
+  theme_standard
+
+```
+
+Relationship log10(qvalue) and F<sub>ST</sub> per Locus.
+
+```{r fig.height=5, fig.width=5}
+
+ggplot(fst, aes(x = log10q, y = fst)) +
+  geom_point(shape = 1, size = 2, color = "black") +
+  geom_vline(xintercept = log10(0.05), color = "red", linetype = "dashed") +
+  geom_vline(xintercept = log10(0.01), color = "red", linetype = "dashed") +
+  geom_vline(xintercept = log10(0.001), color = "red", linetype = "dashed") +
+  geom_hline(aes(yintercept = mean(fst, na.rm = TRUE)), 
+             color = "darkblue", linetype = "dashed", size = 0.5) +
+  geom_hline(aes(yintercept = quantile(fst, 0.05, na.rm = TRUE)), color = "darkblue", linetype = "dashed", size = 0.5) +
+  labs(x = "log10(qvalue)", "Fst per Locus") +
+  theme_standard
+
+```
+
+#### Identify Outlier Loci Potentially Under Selection
+
+Identify loci with q-value < 0.05.
+
+```{r message=FALSE}
+
+outlier_bayescan <- fst %>%
+  filter(qval <= 0.05)
+
+write_delim(outlier_bayescan, here("fst_outlier", "data", "bayescan_output.txt"), delim = "\t")
+
+outlier_bayescan <- read_delim(here("fst_outlier", "data", "bayescan_output.txt"), delim = "\t") %>%
+  select(LOCUS)
+
+write_delim(outlier_bayescan, here("fst_outlier", "results", "bayescan_outliers.txt"), delim = "\t")
+
+```
+
+## Arlequin, Coalescent Simulations Using FDIST Method
+
+For the island model, define structure where all samples are in one group. 
+
+For the hierarchical island model, define structure in Arlequin where all samples are split into two (Atlantic and Gulf) and three (Atlantic, eastern Gulf, western Gulf) groups.
+
+Structures for the different models are defined in a `.txt` file which is concatenated to the end of `.arp` files to produce distinct files.
+
+Settings files prepared in the `Arlequin` GUI are transfered to a Linux server where the program is executed using a bash script. 
+
+### Format Data
+
+Rename `pop` in `.arp` files with site name. Prep `.arp`files for locus-by-locus pairwise FST tests and insert structure formats. 
+
+```{bash, eval = FALSE}
+
+cd ~/Projects/us_blacktips/fst_outlier/data
+
+# rename sites
+
+sed -i 's/"pop_1"/"BLB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_2"/"SHS"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_3"/"PRS"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_4"/"TCB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_5"/"WAB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_6"/"APB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_7"/"MOB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_8"/"GAB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_9"/"MAB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_10"/"SAB"/g' yoy_site.arp yoy_site.arp
+
+sed -i 's/"pop_11"/"CCB"/g' yoy_site.arp yoy_site.arp
+
+# add structure
+
+## island
+
+cat yoy_site.arp yoy_site_isl_str.txt > yoy_site_isl.arp
+
+## hierarchical island, 2 groups (Atl and Gulf)
+
+cat yoy_site.arp yoy_site_hier2_str.txt > yoy_site_hier2.arp
+
+## hierarchical island, 3 groups (Atl, EGoM, WGoM)
+
+cat yoy_site.arp yoy_site_hier3_str.txt > yoy_site_hier3.arp
+
+
+```
+
+### Execute
+
+Use files produced above and settings files prepared in Arlequin to execute locus-by-locus AMOVA and post-hoc pairwise FST tests among sites and regions. 
+
+```{bash, eval = FALSE}
+
+cd ~/Projects/us_blacktips/fst_outlier/data
+
+dos2unix ../code/yoy_fdist_sim.sh
+
+bash ../code/yoy_fdist_sim.sh
+
+
+```
+
+### Results
+
+##### Evaluate Simulated FST-Heterozygosity Distribution
+
+```{r fig.height=4, fig.width=10, warning=FALSE, message=FALSE}
+
+models <- c("isl", "hier2")
+
+fst_sim <- list()
+
+for (i in models){
+  file <- glue("yoy_{i}_fdist2_simOut.txt")    
+  fst_sim[[i]] <- read_table2(here("fst_outlier", "data", file),
+              skip = 1, col_names = c("Fst", "Het", "MeanHetBP", "MeanHetWP", "NumMutsOnTree")) %>% 
+  select(Fst, Het) %>%
+  mutate(model = i)
+}
+
+fst_sim_df <- tibble(do.call(rbind, fst_sim))
+
+```
+
+FST-Heterzygosity distributions for a range of finite island coalescent simulations.
+
+```{r fig.height=5, fig.width=10}
+
+ggplot(fst_sim_df, aes(x = Het, y = Fst)) +
+  geom_point(shape = 1, size = 2, color = "black") +
+  facet_wrap(~ model) +
+  geom_hline(yintercept = 0, color = "darkgrey", linetype = "dotted", size =1) +
+#  scale_y_continuous(limits = c(-0.01, 0.5)) +
+  labs(x = "Heterozygosity", y = "Fst") +
+  theme_standard
+
+```
+
+Compare FST-distributions
+
+```{r fig.height=5, fig.width=10}
+
+ggplot(fst_sim_df, aes(x = Fst)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "darkgrey") +
+  facet_wrap(~ model) +
+  scale_y_sqrt() +
+  labs(x = "Fst", y = "Sqrt (Number of Loci)") +
+  theme_standard
+
+```
+
+Compare stats for different distributions.
+
+```{r fig.height=5, fig.width=5}
+
+fstsim_stats <- fst_sim_df %>%
+  group_by(model) %>%
+  summarise(mean = mean(Fst),
+            std = sd(Fst),
+            `5%` = quantile(Fst, probs = 0.05),
+            `95%` = quantile(Fst, probs = 0.95))
+
+ggplot(fstsim_stats, aes(x = mean, y = `95%`)) +
+  geom_point(shape = 1, size = 3) +
+  theme_standard
+
+```
+
+##### Evaluate Observed FST-Heterozygosity Distribution
+
+```{r warning=FALSE, message=FALSE}
+
+# Get list of loci in data set
+
+loci <- as.data.frame(t(read_delim(here("yoy_site.gen"), delim = ",", col_names = FALSE,
+                                   skip = 1, n_max = 1)))
+
+colnames(loci) <- "LOCUS"
+
+loci_n <- as.data.frame(c(1:nrow(loci)))
+
+colnames(loci_n) <- "loci_n"
+
+loci <- bind_cols(loci_n, loci)
+
+# Import observed Fst/heterozygosity distributions and p-values for each model simulated
+
+models <- c("isl", "hier2")
+
+fst_obs <- list()
+
+for (i in models){
+  file <- glue("yoy_{i}_fdist2_ObsOut.txt")    
+  fst_obs[[i]] <- read_table2(here("fst_outlier", "data", file),
+              skip = 1, col_names = c("loci_n", "obs_het", "obs_fst", "pval", "1Fstquantile")) %>%
+  select(loci_n, obs_fst, obs_het, pval) %>%
+  mutate(model = i)
+}
+
+fst_obs_df <- tibble(do.call(rbind, fst_obs)) %>%
+  select(-loci_n) %>%
+  mutate(pval_corr = p.adjust(pval, method = "fdr"))
+
+```
+
+FST-Heterzygosity distributions for a range of finite island coalescent simulations.
+
+```{r fig.height=5, fig.width=10}
+
+ggplot(fst_obs_df, aes(x = obs_het, y = obs_fst)) +
+  geom_point(shape = 1, size = 2, color = "black") +
+  facet_wrap(~ model) +
+  geom_hline(yintercept = 0, color = "darkgrey", linetype = "dotted", size =1) +
+ # scale_y_continuous(limits = c(-0.01, 0.25)) +
+  labs(x = "Heterozygosity", y = "Fst") +
+  theme_standard
+
+```
+
+FST-heterozygosity distribution for samples split up by group.
+
+```{r fig.height=5, fig.width=10}
+
+ggplot(fst_obs_df, aes(x = obs_fst)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "darkgrey") +
+  facet_wrap(~ model) +
+  scale_y_sqrt() +
+  labs(x = "Fst", y = "Sqrt (Number of Loci)") +
+  theme_standard
+
+```
+
+Distribution of p-values
+
+```{r fig.height=5, fig.width=10}
+
+ggplot(fst_obs_df, aes(x = pval_corr)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "darkgrey") +
+  geom_vline(xintercept = 0.05, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 0.01, color = "red", linetype = "dashed") +
+  scale_x_continuous(limits = c(0, 1)) +
+  facet_wrap(~ model, ncol = 3) +
+  theme_standard
+
+```
+
+FST-heterozygosity distribution indicating p-values.
+
+```{r fig.height=5, fig.width=10}
+
+ggplot(fst_obs_df, aes(x = obs_het, y = obs_fst, color = pval_corr)) +
+  geom_point(shape = 1, size = 2) +
+  facet_wrap(~ model, ncol = 3) +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_color_viridis(direction = 1, option = "viridis") +
+  labs(x = "Heterozygosity", y = "Fst") +
+  theme_standard
+
+```
+
+##### Identify Outlier Loci Putatively Under Selection
+
+Identify loci with corrected p-value < 0.05.
+
+```{r}
+
+outlier_isl <- fst_obs_df %>%
+  filter(model == "isl" & pval_corr < 0.05)
+
+write_delim(outlier_isl, here("fst_outlier", "results", "yoy_isl.outliers"))
+
+outlier_hier2 <- fst_obs_df %>%
+  filter(model == "hier2" & pval_corr < 0.05) 
+
+write_delim(outlier_hier2, here("fst_outlier", "results", "yoy_hier2.outliers"))
+
+```
+
+# Non-model Based Methods
+
+## OutFLANK
+
+#### Create Input Files
+
+```{r OutFLANK input, message=FALSE, warning=FALSE}
+
+# Read 012 format data and eliminate first column
+
+snp_mat <- read_table2(here("fst_outlier", "data", "yoy_outflank.012"), col_names = FALSE) %>%
+  select(-X1)
+
+# Replace -1 with 9 (for missing data)
+
+snp_mat[snp_mat == -1] <- 9
+
+# Convert to an array
+
+snp_mat <- as.matrix(snp_mat)
+
+# Create a vector listing locus names
+
+loc_names <- read_table2(here("fst_outlier", "data", "yoy_outflank.012.pos"), col_names = c("CHROM", "POS")) %>%
+  unite(col = "LOCUS", 1:2, sep = "_", remove = FALSE)
+
+loc_names <- loc_names$LOCUS
+
+# Create a vector with population designations for each individual
+
+inds <- read_table2(here("fst_outlier", "data", "yoy_outflank.012.indv"), col_names = "hiseq_id")
+  
+pop_names <- left_join(yoy_strata, inds) %>%
+  distinct(hiseq_id, .keep_all = TRUE) %>%
+  select(site_shrt)
+
+```
+
+#### Heterozygosity Vs F<sub>ST</sub>
+
+Estimate heterozygosity per locus and calculate F<sub>ST</sub>. 
+
+```{r , message=FALSE, warning=FALSE, output=FALSE}
+
+fst_mat <- MakeDiploidFSTMat(snp_mat, loc_names, pop_names) %>%
+  drop_na(He)
+
+head(fst_mat)
+
+```
+
+Check for loci with low sample sizes or unusual values of uncorrected F<sub>ST</sub>. Look for loci that deviate from the linear relationship in the plots below and remove those loci.
+
+To fit the FST distribution to chi-square, OutFLANK requires the FST uncorrected for sample size (FSTNoCorr). This is a valid approach as long as all loci have equal sample sizes within populations. The effect of correcting for sample size will make the corrected FST estimate (FST) lower than the uncorrected FST estimate (FSTNoCorr). Note that all loci deviate between FST and FSTNoCorr, but OutFLANK assumes that these deviations are the same for each locus. If a locus has a much lower sample size compared to the rest, it could have a broader error distribution (and therefore incorrectly inferred as an outlier).
+
+```{r fig.height=5, fig.width=5}
+
+ggplot(fst_mat, aes(x = FST, y = FSTNoCorr)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, size = 1, color = "red", linetype = "dashed") +
+  labs(x = "FST", y = "Corrected FST") +
+  theme_standard
+
+```
+
+No loci deviate from the linear relationship in the above plots because they were all genotyped in the same number of individuals, thus all loci are retained.
+
+Plot heterozygosity vs. uncorrected FST and histogram of uncorrected FST. 
+
+```{r fig.height=5, fig.width=5}
+
+ggplot(fst_mat, aes(x = He, y = FSTNoCorr)) +
+  geom_point(shape = 1, size = 2) +
+ # scale_y_continuous(limits = c(0, 0.25)) +
+  labs(x = "Heterozygosity", y = "Uncorrected FST per Locus") +
+  theme_standard
+
+ggplot(fst_mat, aes(x = FSTNoCorr)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  #scale_x_continuous(limits = c(0, 0.25)) +
+  labs(x = "Uncorrected FST per Locus, All Loci") +
+  theme_standard
+
+```
+
+#### Determine Trimmed Distribution of F<sub>ST</sub>**
+
+Run the `OutFLANK()` function to estimate the parameters on the neutral FST distribution.
+
+```{r message=FALSE, warning=FALSE}
+
+# Number of spatial locations included in the dataset
+
+n <- length(unique(pop_names))
+
+# Estimate distribution for Sites
+
+outflank <- OutFLANK(fst_mat, n, LeftTrimFraction = 0.05, RightTrimFraction = 0.05,
+                       Hmin = 0.1, qthreshold = 0.05)
+
+```
+
+Check fit by looking at plot, particularly in the right tail.
+
+Also look at p-value histogram. This plots the "right-tailed" p-values, meaning the outliers in the right tail of the FST distribution will have a p-value near zero. We expect the histogram to be flat and maybe have a bump near zero.
+
+```{r fig.height=5, fig.width=5}
+
+OutFLANKResultsPlotter(outflank, withOutliers = TRUE, NoCorr = TRUE, Hmin = 0.1, binwidth = 0.001, Zoom = FALSE, RightZoomFraction = 0.05, titletext = NULL)
+
+hist(outflank$results$pvaluesRightTail)
+
+OutFLANKResultsPlotter(outflank, withOutliers = TRUE, NoCorr = TRUE, Hmin = 0.1, binwidth = 0.001, Zoom = TRUE, RightZoomFraction = 0.1, titletext = NULL)
+
+```
+
+Important values returned by OutFLANK.
+
+```{r}
+
+# Mean FST of loci not flagged as outliers
+
+outflank$FSTbar
+
+# Mean FST of loci not flagged as outliers without sample-size correction
+
+outflank$FSTNoCorrbar
+
+# Inferred df for the chi-square distribution
+
+outflank$dfInferred
+
+# Number of loci flagged as having significantly low FST
+
+outflank$numberLowFstOutliers
+
+# Number of loci flagged as having significantly high FST
+
+outflank$numberHighFstOutliers
+
+# Dataframe of results
+
+temp <- outflank$results
+
+# Check that the number of loci in the input file is the same as the number of loci in the output file
+
+nrow(fst_mat) - nrow(outflank$results)
+
+```
+
+#### Identify Outliers
+
+Dataset contains SNPs on the same contig. Group SNP sites by contig to determine the proportion of SNPs on the same contig that are flagged as F<sub>ST</sub> outliers.
+
+```{r fig.height=5, fig.width=5}
+
+results <- outflank$results %>%
+  drop_na() %>%
+  separate(LocusName, into = c("dD", "Cont", "No", "Pos"), remove = FALSE) %>%
+  unite(contig, 2:4, sep = "_") %>%
+  mutate(freq = (1 - meanAlleleFreq)) %>%
+  mutate(MAF = ifelse(meanAlleleFreq > freq, freq, meanAlleleFreq)) %>%
+  select(-LocusName)
+
+write_csv(results, here("fst_outlier", "data", "outflank_output.csv"))
+
+```
+
+Plot outliers, if present.
+
+```{r fig.height=5, fig.width=5, eval = F}
+
+contig <- results %>%
+  group_by(contig) %>%
+  count(OutlierFlag) %>%
+  spread(key = OutlierFlag, value = n) %>%
+  rename(OUT = `TRUE`) %>%
+  rename(IN = `FALSE`) %>%
+  replace_na(list(IN = 0, OUT = 0)) %>%
+  mutate(SNPs = IN + OUT, prop_IN = IN/SNPs, prop_OUT = OUT/SNPs)
+
+ggplot(contig, aes(x = prop_IN)) +
+  geom_histogram(binwidth = 0.05, color = "black", fill = "darkgrey") + 
+  labs(x = "% SNPs Per Contig, Neutral") +
+  theme_standard
+
+ggplot(contig, aes(x = prop_OUT)) +
+  geom_histogram(binwidth = .05, color = "black", fill = "darkgrey") + 
+  labs(x = "% SNPs Per Contig, Outlier") +
+  theme_standard
+
+# Outflank plot
+
+plot(outflank$results$He, outflank$results$FST, pch=20, col="grey")
+    points(outflank$results$He[outflank$results$qvalues<0.01], outflank$results$FST[outflank$results$qvalues<0.01], pch=21, col="blue")
+                                                                                                   
+```
+
+**Identify Outlier(s)**
+
+```{r, warning=FALSE, message=FALSE, output=FALSE}
+
+outliers <- results %>%
+ filter(qvalues < 0.05)
+
+outflank_outliers <- distinct(outliers, contig) %>%
+ rename(LOCUS = contig) %>%
+  distinct()
+
+write_delim(outflank_outliers, here("fst_outlier", "results", "outflank_outliers.csv"), delim = "\t")
+
+count(outflank_outliers)
+
+```
+
+### USE THE CHUNK BELOW TO DETERMINE WHICH PACKAGES WERE USED AND REMOVE THOSE NOT FROM THE FIRST CHUNK
+
+`r margin_note("Package versions used for this analysis (R 3.6.0).")`
+
+```{r}
+
+subset(data.frame(sessioninfo::package_info()), attached==TRUE, c(package, loadedversion))
+
+```
+
+
+
+
+

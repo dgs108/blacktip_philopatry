@@ -1,0 +1,2696 @@
+---
+title: "RDA: YOY Blacktips in US. Waters"
+author: "DG Swift"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+Use **Redundancy Analysis (RDA)** as a genotype-environment association (GEA) method to understand which geographic and environmental factors explain the overall observed pattern of genetic variation (Oksanen et al. 2010; Forester et al. 2016; 2018). RDA is a multivariate ordination technique which can be used to analyse many loci and geographic/environmental predictors simultaneously. RDA determines how groups of loci covary in response to the multivariate environment and can detect processes which result in weak, multilocus molecular signatures (Rellstab et al. 2015)
+
+RDA is a two-step analysis in which genetic and environmental data are analysed using multivariate linear regression which produces a matrix of fitted values. PCA of the fitted values is then used to produce canonical axes which are linear combinations of the predictors (Legendre & Legendre, 2012). RDA can be used to analyse genomic data derived from both individual and population-based sampling designs.
+
+RDA is a linear model, thus assumes a linear dependence between genotypes (response variables) and environmental predictors (explanatory variables). See Borcard et al. (2011) for more information on implementation. See Oksanen et al. 2017 for interpretation of RDA using the `vegan` package. 
+  
+# Environment
+  
+```{r, message=FALSE}
+
+.libPaths("/usr/lib64/R/library")
+
+# invalidate cache when the package version changes
+
+knitr::opts_chunk$set(
+  root.dir = "~/Projects/us_blacktips/rda",
+	message = FALSE,
+	warning = FALSE,
+	cache.extra = packageVersion("tint"),
+	tidy = FALSE,
+	echo = FALSE)
+
+options(htmltools.dir.version = FALSE)
+
+# conflicts
+
+library(conflicted)
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("s.label", "adegraphics")
+conflict_prefer("s.value", "adegraphics")
+conflict_prefer("scalebar", "raster")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("extract", "raster")
+conflict_prefer("degree", "igraph")
+
+# packages
+
+library(tidyverse)
+library(here)
+library(patchwork)
+library(broom)
+library(psych)
+library(vegan)
+library(adegenet)
+library(ggthemes)
+library(poppr)
+library(ggmap)
+library(ggsn)
+library(ggrepel)
+library(SoDA)
+library(codep)
+library(adespatial)
+library(adegraphics)
+library(ape)
+library(car)
+library(sf)
+library(spdep)
+library(sp)
+library(rgdal)
+library(raster)
+library(gdistance)
+library(geoR)
+library(foreach)
+library(RColorBrewer)
+library(groc)
+library(qvalue)
+library(sdmpredictors)
+library(tufte)
+library(tint)
+library(knitr)
+library(zvau)
+library(gdata)
+library(ggnewscale)
+library(glue)
+library(leaflet)
+library(vcfR)
+library(LDna)
+library(gaston)
+library(ggnetwork)
+
+`%not in%` <- function (x, table) is.na(match(x, table, nomatch=NA_integer_))
+
+# source scripts
+
+source("~/code/ggplot.R")
+source("~/code/genind.R")
+source("~/code/PCA.R")
+source("~/code/DAPC.R")
+source("~/code/vegan.R")
+
+# orders, colors, shapes
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+site_order <- c("Bulls_Bay", 
+                "St._Helena_Sound",
+                "Port_Royal_Sound",
+                "Terra_Ceia_Bay",
+                "Waccasassa_Bay",
+                "Apalachicola_Bay",
+                "Mobile_Bay",
+                "Galveston_Bay",
+                "Matagorda_Bay",
+                "San_Antonio_Bay",
+                "Corpus_Christi_Bay")
+
+site_order_fig <- c("Bulls Bay", 
+                "St. Helena Sound",
+                "Port Royal Sound",
+                "Terra Ceia Bay",
+                "Waccasassa Bay",
+                "Apalachicola Bay",
+                "Mobile Bay",
+                "Galveston Bay",
+                "Matagorda Bay",
+                "San Antonio Bay",
+                "Corpus Christi Bay")
+
+site_order_fig_rev <- c("Corpus Christi Bay",
+                        "San Antonio Bay",
+                        "Matagorda Bay",
+                        "Galveston Bay",
+                        "Mobile Bay",
+                        "Apalachicola Bay",
+                        "Waccasassa Bay",
+                        "Terra Ceia Bay",
+                        "Port Royal Sound",
+                        "St. Helena Sound",
+                        "Bulls Bay")
+
+site_order_fig_map <- c("Galveston Bay",
+                        "Matagorda Bay",
+                        "San Antonio Bay",
+                        "Corpus Christi Bay",
+                        "Mobile Bay",
+                        "Apalachicola Bay",
+                        "Waccasassa Bay",
+                        "Terra Ceia Bay",
+                        "Bulls Bay",
+                        "St. Helena Sound",
+                        "Port Royal Sound")
+
+region_order <- c("Atl", "EGoM", "WGoM")
+
+region_order_fig <- c("Atlantic", "Eastern Gulf", "Western Gulf")
+
+region_order_fig_rev <- c("Western Gulf", "Eastern Gulf", "Atlantic")
+
+site_col <- c("#7f0000", "#b30000", "#d7301f", "#4d004b", "#810f7c", "#88419d", "#8c96c6", "#9ecae1", "#4292c6", "#08519c", "#08306b")
+
+site_col_rev <- c("#08306b", "#08519c", "#4292c6", "#9ecae1", "#8c96c6", "#88419d", "#810f7c", "#4d004b", "#7f0000", "#b30000", "#d7301f")
+
+site_col_map <- c("#9ecae1", "#4292c6", "#08519c", "#08306b", "#8c96c6", "#88419d", "#810f7c", "#4d004b", "#d7301f", "#b30000", "#7f0000")
+              
+shape11 <- c(21, 21, 21, 23, 23, 23, 23, 24, 24, 24, 24)
+
+shape11_rev <- c(24, 24, 24, 24, 23, 23, 23, 23, 21, 21, 21)
+
+shape3 <- c(21, 23, 24)
+
+shape3_rev <- c(24, 23, 21)
+
+region_col <- c('#b30000','#810f7c','#08519c')
+
+lib_col <- c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF33")
+
+```
+
+# Import and Format Data
+
+```{r, message=FALSE}
+
+# import YOY strata and genepop
+
+yoy_strata <- read_csv(here("yoy_strata.csv")) %>%
+  mutate(Site = case_when(site_shrt %in% "BLB" ~ "Bulls Bay",
+                            site_shrt %in% "SHS" ~ "St. Helena Sound",
+                            site_shrt %in% "PRS" ~ "Port Royal Sound",
+                            site_shrt %in% "TCB" ~ "Terra Ceia Bay",
+                            site_shrt %in% "WAB" ~ "Waccasassa Bay",
+                            site_shrt %in% "APB" ~ "Apalachicola Bay",
+                            site_shrt %in% "MOB" ~ "Mobile Bay",
+                            site_shrt %in% "GAB" ~ "Galveston Bay",
+                            site_shrt %in% "MAB" ~ "Matagorda Bay",
+                            site_shrt %in% "SAB" ~ "San Antonio Bay",
+                            site_shrt %in% "CCB" ~ "Corpus Christi Bay")) %>%
+  mutate(Region = case_when(region %in% c("Atl") ~ "Atlantic",
+                            region %in% c("EGoM") ~ "Eastern Gulf",
+                            region %in% c("WGoM") ~ "Western Gulf")) %>% 
+  mutate(Site = ordered(Site, levels = site_order_fig_map)) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig_rev))
+
+yoy.gen <- read.genepop(file = here("yoy_site.gen"), ncode = 3L, quiet = FALSE)
+
+# assign strata
+
+inds <- as.data.frame(indNames(yoy.gen)) %>%
+  rename(hiseq_id = `indNames(yoy.gen)`)
+
+yoy_strata <- left_join(inds, yoy_strata) # WHENEVER JOINING INDS TO STRATA, ALWAYS HAVE INDS ON THE LEFT SO THE ORDER OF GENEPOP IS MAINTAINED! 
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# n per site per year
+
+yoy_site_year <- yoy_strata %>% 
+  group_by(site) %>% 
+  count(year)
+
+write_csv(yoy_site_year, here("rda", "results", "yoy_site_year.csv"))
+
+```
+
+## Response Variables (Genotypes)
+
+```{r, message=FALSE}
+
+# Replace missing with mean
+
+yoy.gen <- missingno(yoy.gen, type = "mean")
+
+# assign strata
+
+inds <- as.data.frame(indNames(yoy.gen)) %>%
+  rename(hiseq_id = `indNames(yoy.gen)`)
+
+yoy_strata <- left_join(inds, yoy_strata)
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# convert to allele counts
+
+allele_counts <- as.data.frame(tab(yoy.gen))
+
+```
+
+The response variables consist of `r ncol(allele_counts)` loci genotyped for `r nrow(allele_counts)` individuals across `r length(unique(popNames(yoy.gen)))` sampled estuaries.
+
+# Map Samples
+
+Download map data.
+
+```{r fig.height=10.5, fig.width=19, message=FALSE, warning=FALSE}
+
+# Create basemap
+
+map <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_land")
+
+map <- tidy(map) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+  droplevels()
+
+# Nation lines basemap
+
+nations <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_admin_0_countries")
+
+nations <- tidy(nations) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+  droplevels()
+
+# State line basemap
+
+states <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_admin_1_states_provinces_lines")
+
+states <- tidy(states) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+  droplevels()
+
+# rivers basemap
+
+major_rivers <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_rivers_lake_centerlines_scale_rank")
+
+major_rivers <- tidy(major_rivers) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+  droplevels()
+
+minor_rivers <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_rivers_north_america")
+
+minor_rivers <- tidy(minor_rivers) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+  droplevels()
+
+```
+
+Plot.
+
+```{r fig.height=11, fig.width=19, message=FALSE, warning=FALSE}
+
+# produce df of numbers per site
+
+sample_n <- count(yoy_strata, Site)
+
+sample_n <- yoy_strata %>%
+  group_by(Site) %>% 
+  mutate(lat_cen = mean(latitude), long_cen = mean(longitude)) %>%
+  distinct(Site, Region, lat_cen, long_cen) %>%
+  left_join(sample_n) %>%
+  mutate(Site = ordered(Site, levels = site_order_fig_rev))
+
+# Range of latitudes and longitudes
+
+range(yoy_strata$latitude)
+range(yoy_strata$longitude)
+
+# Plot samples by site
+
+## limits for stock boundaries
+
+atl_gom_bnd <- data.frame(x1 = -80, x2 = -79, y1 = 25.34, y2 = 25.34)
+
+gom_bnd <- data.frame(x1 = -88, x2 = -88, y1 = 28.8, y2 = 30.7)
+
+ggplot() +
+  geom_segment(aes(x = x1, y = y1, xend = x2, yend = y2), size = 1.5, color = "black", linetype = "dotted", data = atl_gom_bnd) +
+  geom_segment(aes(x = x1, y = y1, xend = x2, yend = y2), size = 1.5, color = "black", linetype = "dotted", data = gom_bnd) +
+  geom_path(data = map, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.5) +
+  geom_path(data = states, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.5, linetype = "longdash") +
+  geom_path(data = nations, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.75, linetype = "solid") +
+#  geom_path(data = minor_rivers, 
+ #           aes(x = long, y = lat, group = group), 
+  #          color = "darkblue", size = 0.5, linetype = "dotted") +
+#  geom_path(data = major_rivers, 
+ #           aes(x = long, y = lat, group = group), 
+  #          color = "darkblue", size = 1, linetype = "longdash") +
+#  geom_polygon(fill="lightgray", colour = "white") +
+  geom_point(data = yoy_strata,
+             aes(x = longitude, y = latitude, fill = Site, shape = Region), size = 5, alpha = 0.8, show.legend = T) +
+  geom_label_repel(data = sample_n, aes(x = long_cen, y = lat_cen, label = n), size = 5, position = position_nudge(y = 0.2)) +
+  annotate("label", x = -96.5, y = 30, label = "TX", size = 7) +
+  annotate("label", x = -92, y = 30.5, label = "LA", size = 7) +
+  annotate("label", x = -89.25, y = 31.5, label = "MS", size = 7) +
+  annotate("label", x = -87, y = 31.5, label = "AL", size = 7) +
+  annotate("label", x = -81.75, y = 29, label = "FL", size = 7) +
+  annotate("label", x = -83, y = 31.5, label = "GA", size = 7) +
+  annotate("label", x = -80.5, y = 33.5, label = "SC", size = 7) +
+  annotate("label", x = -88, y = 33.65, label = "United States", size = 10) +
+  annotate("label", x = -80.25, y = 30, label = "Atlantic", size = 8) +
+  annotate("label", x = -87, y = 30, label = "Gulf of Mexico", size = 8) +
+  north(map, location = "topright", scale = 0.1, symbol = 1, anchor = c(x = -94.75, y = 33.75)) +
+  ggsn::scalebar(map, location = "topright", dist = 100, dist_unit = "km", transform = TRUE, model = "WGS84", st.size = 6, anchor = c(x = -95, y = 31.5)) +
+  scale_x_continuous("Longitude", limits = c(-98, -79), breaks = c(seq(-98, -79, 1)), labels = c(seq(-98, -79, 1))) +
+  scale_y_continuous("Latitude", limits = c(25, 34), breaks = c(seq(25, 34, 1)), labels = c(seq(25, 34, 1))) +
+  scale_fill_manual(values = site_col_map) +
+  scale_shape_manual(values = shape3_rev) +
+  guides(fill = guide_legend(nrow = 4, override.aes = list(shape=shape11_rev, size = 5, alpha = 1)), shape = guide_legend(override.aes = list(size = 5)), size = FALSE) +
+  theme_standard +
+  theme(legend.text=element_text(size=16), legend.title=element_text(size=20), axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggsave(here("rda", "results", "yoy_sample_map.pdf"))
+
+#ggsave(here("rda", "results", "yoy_sample_map.png"))
+
+```
+
+# RDA
+
+Redundancy analysis (RDA) is an ordination method to determine how much variation of one set of explanatory variables (e.g. spatial or environmental) explains the variation in another set of response variables (e.g. genotypes). It is a multivariate analogue of simple linear regression and assumes the relationship between the variables is linear. 
+
+RDA requires complete data frames, thus no missing data is allowed for the genind. Replace missing data with mean allele frequency and convert to allele counts. The same response variables (`allele_counts`) will be used for the spatial and environmental RDA.
+
+## Spatial Explanatory Variables (dbMEM)
+
+Calculation of spatial eigenvector maps requires a distance matrix. Due to the location of samples either side of the Florida peninsula, calculate least-cost distance by water (i.e. "shark distance") and use these distances to produce a matrix which can calculate distance-based Moran's eigenvector maps (dbMEMs)
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Rasterize shp file
+
+area <- st_read(here("rda", "data", "NOS80k.shp")) %>%
+       st_transform(crs = 32616)
+
+raster_map <- raster(x = extent(area), nrow = 1000,  ncol = 1000)
+raster_map <- rasterize(x = area, y = raster_map, field = 1)
+raster_map[1==(raster_map)] <- 2
+raster_map[is.na(raster_map)] <- 1
+raster_map[2==(raster_map)] <- 0
+
+plot(raster_map)
+
+raster_bay_tr <- transition(raster_map, transitionFunction = mean, directions = 16)
+raster_bay_tr <- geoCorrection(raster_bay_tr, type = "c")
+
+# Jitter lat longs which are duplicates
+
+xy_jit <- yoy_strata %>%
+  select(hiseq_id, latitude, longitude) %>%
+  column_to_rownames("hiseq_id") %>%
+  jitterDupCoords(max = 0.0001, min = 0.00001) %>%
+  rownames_to_column("hiseq_id") %>%
+  rename(jit_long = longitude) %>% 
+  rename(jit_lat = latitude)
+
+yoy_strata <- left_join(yoy_strata, xy_jit, by = "hiseq_id")
+
+write_csv(yoy_strata, here("rda", "data", "yoy_strata_rda.csv"))
+
+```
+
+Calculate the distance between each sampling location "as the bird flies" and "as the shark swims". 
+
+```{r message=FALSE, warning=FALSE}
+
+# Convert lat longs to UTMs
+
+yoy_strata <- read_csv(here("rda", "data", "yoy_strata_rda.csv"))
+
+xy_jit_id <- yoy_strata %>%
+  select(hiseq_id, jit_long, jit_lat)
+
+# choose appropriate crs values based on location of samples (i.e. Lousiana is the middle of Gulf and Atlantic)
+
+coords <- st_as_sf(xy_jit_id, coords = c("jit_long", "jit_lat"), crs = 4326, stringsAsFactors = FALSE) %>%
+          st_transform(crs = 32616)
+
+# Calculate bird distance
+
+bird_mat_foreach <- foreach(i=coords, .combine='rbind') %dopar% {
+      st_distance(x = coords[i,], y = coords[i,])
+    }
+
+bird_mat_foreach <- bird_mat_foreach[1:nrow(allele_counts), 1:nrow(allele_counts)]
+rownames(bird_mat_foreach) <- coords$hiseq_id
+colnames(bird_mat_foreach) <- coords$hiseq_id
+
+# Convert matrix to distance matrix
+
+bird_dist_mat <- as.dist(bird_mat_foreach)
+
+# Calculate shark distance using foreach (much faster)
+
+start <- proc.time()
+
+shark_mat_foreach <- foreach(i=coords, .combine='rbind') %dopar% {
+      costDistance(raster_bay_tr,
+                      fromCoords = as(as_Spatial(coords[i,]), "SpatialPoints"),
+                      toCoords = as(as_Spatial(coords[i,]), "SpatialPoints"))
+    }
+
+dopar_loop <- proc.time()-start
+
+shark_mat_foreach <- shark_mat_foreach[1:nrow(allele_counts), 1:nrow(allele_counts)]
+rownames(shark_mat_foreach) <- coords$hiseq_id
+colnames(shark_mat_foreach) <- coords$hiseq_id
+
+# Convert matrix to distance matrix
+
+shark_dist_mat <- as.dist(shark_mat_foreach)
+
+# calculate shark distance from first point to each point
+
+xy_jit_id_dist <- yoy_strata %>%
+  select(hiseq_id, jit_long, jit_lat) %>%
+  arrange(jit_long) # you need to arrange here so that the first point is the most western (i.e., the starting point)
+
+# choose appropriate crs values based on location of samples (i.e. Louisiana is the middle of Gulf and Atlantic)
+
+coords <- st_as_sf(xy_jit_id_dist, coords = c("jit_long", "jit_lat"), crs = 4326, stringsAsFactors = FALSE) %>%
+          st_transform(crs = 32616)
+
+
+shark_dist_vec <- foreach(i=coords) %dopar% {
+      costDistance(raster_bay_tr,
+                      fromCoords = as(as_Spatial(coords[1,]), "SpatialPoints"),
+                      toCoords = as(as_Spatial(coords[i,]), "SpatialPoints"))
+    }
+
+shark_dist_vec <- as.vector(shark_dist_vec[[1]]) %>%
+  as.data.frame() %>%
+  rename(distance = ".")
+rownames(shark_dist_vec) <- coords$hiseq_id
+
+shark_dist_vec <- shark_dist_vec %>%
+  rownames_to_column("hiseq_id")
+
+write_csv(shark_dist_vec, here("rda", "data", "shark_dist.csv"))
+
+# estimate shark distance between each site
+
+site_n <- count(yoy_strata, site_shrt)
+
+temp <- yoy_strata %>%
+  group_by(site_shrt) %>% 
+  mutate(lat_cen = mean(latitude), long_cen = mean(longitude)) %>%
+  distinct(site_shrt, lat_cen, long_cen) %>%
+  arrange(desc(long_cen))
+
+# convert lat/long to UTM
+
+site_coords <- st_as_sf(temp, coords = c("long_cen", "lat_cen"), crs = 4326, stringsAsFactors = FALSE) %>%
+          st_transform(crs = 32616)
+
+# estimate shark distance 
+
+shark_mat_site_foreach <- foreach(i=site_coords) %dopar% {
+      costDistance(raster_bay_tr,
+                      fromCoords = as(as_Spatial(site_coords[i,]), "SpatialPoints"),
+                      toCoords = as(as_Spatial(site_coords[i,]), "SpatialPoints"))
+}
+
+# produce df 
+
+site_shark_dist_df <- as.data.frame(shark_mat_site_foreach[[1]]) %>%
+  cbind(as.data.frame(temp$site_shrt)) %>%
+  rename(site = "temp$site_shrt") %>%
+  column_to_rownames("site")
+
+site_shark_dist_df <- as.numeric(lowerTriangle(site_shark_dist_df, diag = TRUE, byrow = FALSE)) %>%
+  as.data.frame() %>%
+  rename(site_shark_dist = ".")
+
+# export 
+
+write_csv(site_shark_dist_df, here("rda", "data", "site_shark_dist.csv"))
+
+```
+
+### Calculate dbMEMs
+
+Calculate dbMEMs using "shark distance". MEMs are orthogonal vectors with a unit norm that maximises spatial autocorrelation (Griffith 1996; Dray et al. 2012). To demonstrate the difference between "shark distance" and diagonal distance ("bird distance"), produce graphics for both.  Default setting will be kept for truncation, i.e. the length of the longest edge of the minimum spanning tree will be used as the threshold. Only positive MEMs are retained.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+dbMEM_shark <- dbmem(shark_dist_mat)
+
+temp <- yoy_strata %>%
+  select(jit_long, jit_lat) 
+
+s.label(temp, nb = attr(dbMEM_shark, "listw"))
+
+s.value(temp, dbMEM_shark[,1], symbol = "circle", ppoint.cex = 0.6)
+
+```
+
+Visualise the MEM values. First MEMs are large spatial scales; spatial scales get increasingly smaller for smaller MEMs.
+
+```{r fig.height=10, fig.width=20, message=FALSE, warning=FALSE}
+
+# MEM order
+
+mem_order <- names(dbMEM_shark)
+  
+mems <- as.data.frame(dbMEM_shark) %>%
+  rownames_to_column() %>%
+  rename(hiseq_id = rowname) %>%
+  left_join(yoy_strata) %>%
+  pivot_longer(cols = 2:11, names_to = "MEM", values_to = "VALUE") %>%
+  mutate(ABSOLUTE_VALUE = abs(VALUE),
+         DIRECTION = ifelse(VALUE < 0, "NEGATVE", "POSITIVE")) %>%
+  mutate(MEM = ordered(MEM, levels = mem_order))  %>%
+  mutate(region = if_else(region == "Atl", "Atlantic", 
+                            if_else(region == "EGoM", "Eastern Gulf",
+                                    if_else(region == "WGoM", "Western Gulf", "other")))) %>%
+  mutate(region = ordered(region, levels = region_order_fig_rev))
+
+write_csv(mems, here("rda", "data", "mems.csv"))
+
+# plot
+
+ggplot() +
+  geom_path(data = map, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.5) +
+  geom_path(data = states, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.2, linetype = "dashed") +
+  geom_point(data = mems, 
+             aes(x = longitude, y = latitude, fill = DIRECTION, size = ABSOLUTE_VALUE),
+             shape = 21, color = "black") +
+  facet_wrap(~ MEM) +
+  scale_fill_manual(values = c("gold", "blue")) +
+  xlim(-98, -79) +
+  ylim(25, 34) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_standard
+
+ggsave(here("rda", "data", "mem_maps.png"))
+
+```
+
+### Model Selection
+
+Select the best model for spatial variables using forward and reverse selection implemented with permutation tests on the RDA object. A model is defined and a scope of models are considered. The function alternates with `drop` and `add` steps and stops when the model is not changed during one step.
+
+```{r}
+
+rda.MEM <- rda(allele_counts ~ ., data.frame(dbMEM_shark), scale = TRUE)
+
+stp.MEM <- ordiR2step(rda(allele_counts ~ 1, data.frame(dbMEM_shark)), 
+                   scope = formula(rda.MEM), 
+                   R2scope = T,
+                   Pin = 0.01,
+                   Pout = 0.1,
+                   direction="forward", 
+                   R2permutations = 1000,
+                   parallel = 25)
+
+dbMEM_shark_selected <- dbMEM_shark %>%
+  as.data.frame() %>%
+  select(one_of(attributes(stp.MEM$terms)$term.labels))
+
+# export
+
+temp <- dbMEM_shark_selected %>%
+  rownames_to_column("hiseq_id")
+
+write_csv(temp, here("rda", "data", "mem_select.csv"))
+
+```
+
+### Selected MEMs
+
+To demonstrate what each MEM is describing, plot values of MEM1 and MEM2 against least-cost distance to show how variance in MEM values around 0 relate to distance between individuals.
+
+Spatial scales for each MEM with one point per site and no sign wave.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+mem_select <- read_csv(here("rda", "data", "mem_select.csv"))
+
+shark_dist_vec <- read_csv(here("rda", "data", "shark_dist.csv"))
+
+mem_select <- left_join(mem_select, shark_dist_vec) %>%
+  left_join(., yoy_strata) %>% 
+  mutate(dist_km = distance / 1000) %>%
+  mutate(Site = ordered(Site, levels = site_order_fig_rev)) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig_rev))
+
+# calculate means
+
+mem_means <- mem_select %>% 
+  select(hiseq_id, MEM1, MEM2, dist_km, Site, Region) %>%
+  group_by(Site, Region) %>%
+  summarise_if(is.numeric, funs(mean(.))) %>%
+  rename(MEM1_mean = MEM1) %>%
+  rename(MEM2_mean = MEM2) %>%
+  rename(dist_mean = dist_km)
+
+# calculate SDS
+
+mem_sds <- mem_select %>% 
+  select(hiseq_id, MEM1, MEM2, dist_km, Site, Region) %>%
+  group_by(Site, Region) %>%
+  summarise_if(is.numeric, funs(sd(.))) %>%
+  rename(MEM1_sd = MEM1) %>%
+  rename(MEM2_sd = MEM2) %>%
+  rename(dist_sd = dist_km)
+
+# plot
+
+site_col_long <- c("#d7301f", "#b30000", "#7f0000", "#4d004b", "#810f7c", "#88419d", "#8c96c6", "#9ecae1", "#4292c6", "#08519c", "#08306b")
+
+temp <- left_join(mem_means, mem_sds) %>% 
+  mutate(Site = ordered(Site, levels = site_order_fig)) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig))
+
+## MEM1
+
+mem1_plot <- ggplot(temp, aes(x=dist_mean, y=MEM1_mean, fill=Site, shape = Region)) + 
+ # geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  geom_point(stat="identity", size = 5, position = position_jitter(width = 0, height = 0), show.legend = F) +
+  geom_errorbar(aes(ymin = MEM1_mean - MEM1_sd, ymax = MEM1_mean + MEM1_sd), width = 0.5) +
+  scale_x_continuous("Coastal Distance (km)", limits = c(0, 2650), breaks = c(seq(0, 2500, 500)), labels = c(seq(0, 2500, 500))) +
+  scale_y_continuous("MEM1", limits = c(-1.65, 1), breaks = c(seq(-1.5, 1, 0.5)), labels = c(seq(-1.5, 1, 0.5))) +
+  scale_fill_manual(values = site_col_long) +
+  scale_shape_manual(values = shape3) +
+  ggtitle("C") +
+  guides(fill = guide_legend(nrow = 4, override.aes = list(shape=shape11_rev, size = 6, alpha = 1, order = 2)), shape = guide_legend(override.aes = list(size = 6), order = 1)) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+mem1_plot
+
+ggsave(here("rda", "results", "mem1_plot.pdf"))
+
+```
+
+MEM2
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+  
+## MEM2
+
+mem2_plot <- ggplot(temp, aes(x=dist_mean, y=MEM2_mean, fill=Site, shape = Region)) + 
+# geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  geom_point(stat="identity", size = 5, position = position_jitter(width = 0, height = 0), show.legend = F) +
+  geom_errorbar(aes(ymin = MEM2_mean - MEM2_sd, ymax = MEM2_mean + MEM2_sd), width = 0.5) +
+  scale_x_continuous("Coastal Distance (km)", limits = c(0, 2650), breaks = c(seq(0, 2500, 500)), labels = c(seq(0, 2500, 500))) +
+  scale_y_continuous("MEM2", limits = c(-1.5, 1.5), breaks = c(seq(-1.5, 1.5, 0.5)), labels = c(seq(-1.5, 1.5, 0.5))) +
+  scale_fill_manual(values = site_col_long) +
+  scale_shape_manual(values = shape3) +
+  ggtitle("D") +
+  guides(fill = guide_legend(override.aes = list(shape=shape11, size = 8, alpha = 1), order = 1), shape = guide_legend(override.aes = list(size = 8), order = 1), size = FALSE) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+mem2_plot
+
+ggsave(here("rda", "results", "mem2_plot.pdf"))
+
+```
+
+MEM1 separates the Gulf from Atlantic, with the highest value for Mobile Bay and the lowest for St. Helena Sound. 
+The distance between these two sites is approximately 2,000 km (when plotted in Google Earth) or 2,044 km based on intercoastal travel.
+
+Geographic distance described by MEM1.
+
+```{r}
+
+mem1_max <- temp %>% 
+  filter(MEM1_mean == max(temp$MEM1_mean))
+
+mem1_min <- temp %>% 
+  filter(MEM1_mean == min(temp$MEM1_mean))
+
+abs(mem1_max$dist_mean - mem1_min$dist_mean)
+
+```
+
+MEM2 separates the Eastern and Western Gulf, with the highest value for Terra Ceia Bay and the lowest for Corpus Christi Bay. 
+
+The distance between these two sites is approximately 1,800 km (when plotted in Google Earth) or 1,500 km based on intercoastal travel.
+
+Geographic distance described by MEM1.
+
+```{r}
+
+mem2_max <- temp %>% 
+  filter(MEM2_mean == max(temp$MEM2_mean))
+
+mem2_min <- temp %>% 
+  filter(MEM2_mean == min(temp$MEM2_mean))
+
+abs(mem2_max$dist_mean - mem2_min$dist_mean)
+
+```
+
+## Spatial RDA
+
+```{r}
+
+mem_select <- read_csv(here("rda", "data", "mem_select.csv")) %>% 
+  column_to_rownames("hiseq_id")
+
+rda.spa <- rda(allele_counts ~ ., mem_select, scale = TRUE)
+
+rda.spa
+
+RsquareAdj(rda.spa)
+
+# assess collinearity 
+
+vif_mem <- as.data.frame(vif.cca(rda.spa)) %>%
+  rename(vif = `vif.cca(rda.spa)`) %>%
+  rownames_to_column("mem") %>%
+  arrange(desc(vif))
+
+```
+
+The proportion of variance explained by the environmental predictors is `Proportion` column of `Constrained` row in summary table (equivalent to R2 of multiple regression). 
+
+r squared value (`rda.spa$r.squared`) needs to be adjusted based on the number of predictors because the number of explanatory variables inflates the apparent amount of explained variance due to random correlation. The adjusted R2 values is `rda.spa$adj.r.squared`.
+
+The eigenvalues for the constrained axes reflect the variance explaiend by each canonical axis.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+eig <- as.data.frame(rda.spa$CCA$eig) %>%
+  rename(EIGENVALUE = `rda.spa$CCA$eig`) %>%
+  rownames_to_column("RDA_AXIS") %>%
+  mutate(VARIANCE = (EIGENVALUE/sum(EIGENVALUE)*100))
+
+ggplot(eig, aes(x = RDA_AXIS, y = VARIANCE)) +
+  geom_bar(stat = "identity", color = "black", fill = "grey") +
+  labs(x = "RDA Axis", y = "% Variance Explained") +
+  theme_standard
+
+summary(eigenvals(rda.spa, model = "constrained"))
+
+```
+
+#### Test for Significance
+
+Test for significance using a permutation test to generate a p-value which indicates whether the null hypothesis, environment does not explain genetic variation, should be rejected or not. Rows of unconstrained matrix (genetic data) are repeatedly randomized for `n` permutations. Relationship is considered significant if the observed relationship is stronger than the randomly permuted relationship.
+
+Also test for multicollinearity among variables and remove. 
+
+```{r}
+
+# significant of full model
+
+sign_full <- anova.cca(rda.spa, permutations = 1000, parallel = 25)
+
+sign_full
+
+# significance by axis 
+
+sign_axis <- anova.cca(rda.spa, by = "axis", permutations = 1000, parallel = 25)
+
+sign_axis
+
+```
+
+**Relationship is significant for the full model and each axis**
+
+Compare constraints (explanatory variables).
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# produce df of renamed environmental variables 
+
+spa_rda <- as.data.frame((rda.spa$CCA$biplot)) %>%
+  rownames_to_column("mem")
+
+# Plot RDA1 vs RDA2
+
+ggplot() +
+  geom_hline(yintercept = 0, color = "darkblue", linetype = "dashed", size = 0.75) +
+  geom_vline(xintercept = 0, color = "darkblue", linetype = "dashed", size = 0.75) +
+  geom_segment(data = spa_rda, aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+               arrow = arrow(length = unit(0.2, "cm")), 
+               color="darkred", size = 1) +
+  geom_label_repel(data = spa_rda, aes(x = RDA1, y = RDA2, label = mem)) +
+  labs(x = "RDA 1", y = "RDA 2") +
+  theme_standard
+
+ggsave(here("rda", "data", "spa_rda1.2.png"))
+
+```
+
+#### Calculate Loadings
+
+First, compare clustering of individuals based on **weighted average individual scores**, i.e. weighted averages of allele scores that are as similar to linear combination scores as possible. Weights are individual totals of alleles. Use wa-scores to determine how well explanatory variables separate groups of individuals or if explanatory variables can be used to discriminate between groups of individuals.
+
+Use the scaled loadings of the SNPs in the ordination space to determine which alleles appear to be correlated with geographic distances.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# number of axes
+
+n <- ncol(as.data.frame((rda.spa$CCA$biplot)))
+
+# produce df of individuals and weighted loading values
+
+inds_rda_spa <- rda_indv(rda.spa, n) %>%
+  left_join(., yoy_strata) %>%
+  mutate(site_shrt = ordered(site_shrt, levels = site_order_shrt))
+
+# produce df of alleles and scaled loading values
+
+alleles_rda_spa <- rda_alleles(rda.spa, n) %>%
+  rownames_to_column() %>%
+  select(-rowname)
+
+bw <- 0.01
+n_obs = sum(!is.na(alleles_rda_spa$RDA1_SCALED3))
+
+# plot histogram of loadings for RDA1
+
+ggplot(alleles_rda_spa, aes(x = RDA1_SCALED3)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(RDA1_SCALED3, na.rm = TRUE)), color = "black", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA1_SCALED3, na.rm = TRUE))*-2.5), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA1_SCALED3, na.rm = TRUE))*2.5), color = "red", linetype = "dashed", size = 1) +
+  stat_function(fun = function(x) 
+    dnorm(x, mean = mean(alleles_rda_spa$RDA1_SCALED3), sd = sd(alleles_rda_spa$RDA1_SCALED3)) * bw * n_obs, size = 2) +
+  scale_x_continuous("RDA1 Loadings", limits = c(-0.5, 0.5), breaks = seq(-0.4, 0.4, 0.2), labels = seq(-0.4, 0.4, 0.2)) +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggsave(here("rda", "data", "spa_rda1_load.png"))
+
+# plot histogram of loadings for RDA2
+
+ggplot(alleles_rda_spa, aes(x = RDA2_SCALED3)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(RDA2_SCALED3, na.rm = TRUE)), color = "black", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA2_SCALED3, na.rm = TRUE))*-2.5), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA2_SCALED3, na.rm = TRUE))*2.5), color = "red", linetype = "dashed", size = 1) +
+  stat_function(fun = function(x) 
+    dnorm(x, mean = mean(alleles_rda_spa$RDA2_SCALED3), sd = sd(alleles_rda_spa$RDA2_SCALED3)) * bw * n_obs, size = 2) +
+  scale_x_continuous("RDA2 Loadings", limits = c(-0.5, 0.5), breaks = seq(-0.4, 0.4, 0.2), labels = seq(-0.4, 0.4, 0.2)) +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggsave(here("rda", "data", "spa_rda2_load.png"))
+
+```
+
+The histograms show relatively normal distributions of loading for each RDA axis. Alleles loading at the centre do not show a relationship with environmental differences, but those loading in the tails are more likely to be associated with environment. 
+
+Forester's function identifies alleles that load in the tails of the distributions above based on approximately 2.5 standard deviations from the mean (equivalent to two-tailed p value of 0.012). This threshold can be increased to 3 (p value = 0.0027). 
+
+#### Test for Normal Distribution
+
+Check to see if points follow Normal distribution or not. 
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+temp <- as.data.frame(rda.spa$CCA$v) %>%
+  rownames_to_column("loci")
+
+ggplot(temp, aes(sample = RDA1)) + stat_qq() + stat_qq_line() +
+  labs(y = "RDA1") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggplot(temp, aes(sample = RDA2)) + stat_qq() + stat_qq_line() +
+  labs(y = "RDA2") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+```
+
+#### Identify Spatial Loci
+
+```{r fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
+
+# Forester's function
+
+forester_fun <- function(x,z){
+  lims <- mean(x) + c(-1, 1) * z * sd(x)     # find loadings +/-z sd from mean loading     
+  x[x < lims[1] | x > lims[2]]               # locus names in these tails
+}
+
+# break function down for each RDA axis
+
+## threshold
+
+z <- 3
+
+## axis 1
+
+axis1 <- alleles_rda_spa$RDA1_SCALED3
+
+## limits for axis 1
+
+lims1 <- as.data.frame(mean(axis1) + c(-1, 1) * z * sd(axis1)) %>%
+  rename(limits = `mean(axis1) + c(-1, 1) * z * sd(axis1)`)
+
+## alleles for axis 1
+
+alleles1 <- alleles_rda_spa %>%
+  filter(RDA1_SCALED3 < lims1[1,] | RDA1_SCALED3 > lims1[2,]) %>%
+  mutate(axis = 1) %>%
+  rename(loading = RDA1_SCALED3)%>%
+  select(ALLELE_NAME, loading, axis)
+  
+## axis 2
+
+axis2 <- alleles_rda_spa$RDA2_SCALED3
+
+## limits for axis 2
+
+lims2 <- as.data.frame(mean(axis2) + c(-1, 1) * z * sd(axis2)) %>%
+  rename(limits = `mean(axis2) + c(-1, 1) * z * sd(axis2)`)
+
+## alleles for axis 2
+
+alleles2 <- alleles_rda_spa %>%
+  filter(RDA2_SCALED3 < lims2[1,] | RDA2_SCALED3 > lims2[2,]) %>%
+  mutate(axis = 2) %>%
+  rename(loading = RDA2_SCALED3) %>%
+  select(ALLELE_NAME, loading, axis)
+
+# collect alleles for both RDA axes
+
+alleles_all <- rbind(alleles1, alleles2) %>%
+  mutate(ALLELE_NAME = as.character(ALLELE_NAME)) %>%
+  select(axis, ALLELE_NAME, loading)
+
+# number of alleles
+
+alleles_n <- nrow(alleles_all)
+
+# add correlations of each allele to the 2 PCs
+
+foo <- matrix(nrow=(alleles_n), ncol=ncol(mem_select))  # 2 columns for 2 predictors
+colnames(foo) <- c(names(mem_select))
+
+for (i in 1:length(alleles_all$ALLELE_NAME)) {
+  nam <- alleles_all[i,2]
+  snp.gen <- allele_counts[,nam]
+  foo[i,] <- apply(mem_select,2,function(x) cor(x,snp.gen))
+}
+
+alleles_all <- cbind.data.frame(alleles_all, foo)
+
+# find duplicate detections, i.e. alleles that are identified on more than one RDA axis
+
+dupes <- alleles_all %>%
+  group_by(ALLELE_NAME) %>%
+  count() %>%
+  filter(n == 2)
+
+# how many duplicates are there?
+
+nrow(dupes)
+
+# remove duplicates
+
+alleles_all <- alleles_all %>%
+  distinct(ALLELE_NAME, .keep_all = TRUE)
+
+# which predictors each allele are most strongly correlated with
+
+x <- ncol(mem_select)+3
+y <- ncol(mem_select)+3
+
+a <- ncol(alleles_all)+1
+b <- ncol(alleles_all)+2
+
+for (i in 1:length(alleles_all$ALLELE_NAME)) {
+  bar <- alleles_all[i,]
+  alleles_all[i,a] <- names(which.max(abs(bar[4:x]))) # gives the variable
+  alleles_all[i,b] <- max(abs(bar[4:y]))              # gives the correlation
+}
+
+# rename added columns
+
+alleles_all <- alleles_all %>%
+  rename(predictor = "V6") %>%
+  rename(correlation = "V7")
+
+# plot individuals and alleles
+
+## color neutral and adaptive alleles
+
+neu_all <- anti_join(alleles_rda_spa, alleles_all) %>%
+  mutate(predictor = "NO")  %>%
+  select(ALLELE_NAME, RDA1_SCALED3, RDA2_SCALED3, predictor)
+
+temp <- inner_join(alleles_rda_spa, alleles_all) %>%
+  select(ALLELE_NAME, RDA1_SCALED3, RDA2_SCALED3, predictor)
+
+temp <- rbind(neu_all, temp)
+
+# rename sites for plotting
+
+inds_rda_spa_plot <- inds_rda_spa %>%
+    mutate(Site = case_when(site_shrt %in% "BLB" ~ "Bulls Bay",
+                            site_shrt %in% "SHS" ~ "St. Helena Sound",
+                            site_shrt %in% "PRS" ~ "Port Royal Sound",
+                            site_shrt %in% "TCB" ~ "Terra Ceia Bay",
+                            site_shrt %in% "WAB" ~ "Waccasassa Bay",
+                            site_shrt %in% "APB" ~ "Apalachicola Bay",
+                            site_shrt %in% "MOB" ~ "Mobile Bay",
+                            site_shrt %in% "GAB" ~ "Galveston Bay",
+                            site_shrt %in% "MAB" ~ "Matagorda Bay",
+                            site_shrt %in% "SAB" ~ "San Antonio Bay",
+                            site_shrt %in% "CCB" ~ "Corpus Christi Bay")) %>%
+    mutate(Region = case_when(region %in% "Atl" ~ "Atlantic",
+                            region %in% "EGoM" ~ "Eastern Gulf",
+                            region %in% "WGoM" ~ "Western Gulf")) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig)) %>%
+  mutate(Site = ordered(Site, levels = site_order_fig))
+
+# export adaptive loci
+
+spa_loci <- alleles_all %>%
+  separate(ALLELE_NAME, into = c("locus", "allele"), sep = "[.]", remove = TRUE) %>%
+  select(locus, predictor) %>%
+  group_by(locus) %>%
+  unique()
+
+# number of loci per parameter
+
+loci_pred_n <- spa_loci %>%
+  group_by(predictor) %>%
+  count() %>%
+  arrange(desc(n))
+
+# export
+
+write_delim(spa_loci, here("rda", "results", "spa_loci_z3.txt"), delim = "\t")
+
+```
+
+#### Plot Samples
+
+```{r fig.height=7, fig.width=9.25, message=FALSE, warning=FALSE}
+
+site_col_long <- c("#d7301f", "#b30000", "#7f0000", "#4d004b", "#810f7c", "#88419d", "#8c96c6", "#9ecae1", "#4292c6", "#08519c", "#08306b")
+
+# plot RDA1 vs RDA2
+
+temp <- inds_rda_spa_plot
+
+# RDA1 vs RDA2
+
+spa_rda_plot <- ggplot() +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+ # stat_ellipse(data = inds_rda_spa_plot, aes(x = RDA1_WA_SCALED3, y= RDA2_WA_SCALED3, color = Site), size = 1, level = 0.95, show.legend = F) +
+  geom_segment(data = spa_rda, aes(x = 0, y = 0, xend = RDA1*-1, yend = RDA2*-1), 
+               arrow = arrow(length = unit(0.2, "cm")), color="black", size = 1) +
+  geom_point(data = temp, aes(x = RDA1_WA_SCALED3*-1, y= RDA2_WA_SCALED3*-1, shape = Region, fill = Site), size = 5, position = position_jitter(width = 0, height = 0), show.legend = T) +
+  geom_label_repel(data = spa_rda, aes(x = RDA1*-1, y = RDA2*-1, label = mem), size = 4, position = position_nudge(y = c(0, 0), x = c(0, 0))) +
+  scale_x_continuous(breaks = c(seq(-1, 1, 0.5)), labels = c(seq(-1, 1, 0.5))) +
+  scale_y_continuous(breaks = c(seq(-1.5, 1, 0.5)), labels = c(seq(-1.5, 1, 0.5))) +
+  labs(x = paste("RDA1:", round((eig[1, 3]), digits = 3), "%"), 
+       y = paste("RDA2:", round((eig[2, 3]), digits = 3), "%")) +
+  ggtitle("A") +
+  scale_fill_manual(values = site_col_long) +
+  scale_color_manual(values = site_col_long) +
+  scale_shape_manual(values = shape3) +
+  guides(fill = guide_legend(override.aes = list(shape=shape11, size = 8, alpha = 1), order = 1), shape = guide_legend(override.aes = list(size = 8), order = 1), size = FALSE) +
+  theme_standard +
+  theme(legend.text=element_text(size=14), legend.key.height = unit(1.0, "cm"),  legend.position = "right", legend.box = "vertical", legend.title=element_text(size=16), axis.text=element_text(size=12), axis.title=element_text(size=16), legend.spacing.y = unit(0.2, "cm"), plot.title = element_text(size=26))
+
+spa_rda_plot
+
+ggsave(here("rda", "results", "spa_rda_biplot.pdf"))
+
+ggsave(here("rda", "results", "spa_rda_biplot.png"))
+
+```
+
+## Environmental Explanatory Variables
+
+### Environmental Data from Marine Datasets
+
+Use the bioclim and marspec databases to access a greater volume of environmental data than that provided by the samplers.
+
+```{r, warning = F}
+
+# access datasets
+
+marine <- list_datasets(terrestrial = FALSE, marine = TRUE)
+
+# identify appropriate environmental parameters
+
+layers <- list_layers(marine) %>%
+  separate(layer_code, into = c("dataset", "parameter", "stat"), extra = "merge", remove = FALSE) %>%
+  mutate(set = case_when(grepl("temperature", description, ignore.case = TRUE) ~ "temperature",
+                         grepl("salinity", description, ignore.case = TRUE) ~ "salinity",
+                         grepl("oxygen", description, ignore.case = TRUE) ~ "DO",
+                         grepl("Nitrate", description, ignore.case = TRUE) ~ "nitrate",
+                         grepl("Iron", description, ignore.case = TRUE) ~ "iron",
+                         grepl("Phosphate", description, ignore.case = TRUE) ~ "phosphate",
+                         grepl("calcite", description, ignore.case = TRUE) ~ "calcite",
+                         grepl("acidity", description, ignore.case = TRUE) ~ "pH",
+                         grepl("Distance", name, ignore.case = TRUE) ~ "shore_distance",
+                         grepl("bathy", name, ignore.case = TRUE) ~ "bathymetry")) %>%
+  drop_na(set) %>% 
+  filter(layer_code != "MS_sst12_5m") %>% # remove this variable bcoz it never downloads and prevents the downloading of other variables
+  arrange(set)
+
+rm(marine)
+
+```
+
+Look through layers to download and extract values for coordinates
+
+```{r, warning=FALSE, eval=FALSE}
+
+set <- unique(layers$set)
+
+for(s in set){
+  
+  cat(s,"start download ...")
+  
+  # data frame for results
+  env <- yoy_strata %>%
+    select(hiseq_id, site_shrt, jit_lat, jit_long)
+  
+  # subset layers
+  layer_subset <- layers %>%
+    filter(set == s)
+  
+  # filename
+  path <- glue(here("rda", "data", "{s}_env.param"))
+
+  # download all the layers in the set
+  for(l in layer_subset$layer_code){
+
+    # download layer
+    env_layer <- load_layers(l)
+    
+    # coordinates
+    xy <- yoy_strata %>%
+      select(jit_long, jit_lat)
+
+    # extract values for xy coordinates
+    param <- raster::extract(x = env_layer,
+                     y = xy,
+                     method = "bilinear") %>%
+        as.data.frame() %>%
+        magrittr::set_names(l)
+
+    # combine results
+    env <- env %>%
+      bind_cols(param)
+    
+    # write to file
+    write_delim(env, path, delim = "\t")
+
+    }
+  
+}
+
+```
+
+Load variables for all sets of variables.
+
+```{r, warning=FALSE, eval=FALSE, message=FALSE}
+
+# create a list from these files
+
+files <- list.files(path = here("rda", "data"), pattern = "_env.param")
+
+# empty list
+
+env_param <- list()
+ 
+# create a loop to read in your data
+
+for (f in files){
+  
+  path = glue(here("rda", "data", "{f}"))
+  
+  df <- read_delim(path, delim = "\t") %>%
+    select(-site_shrt, -jit_lat, -jit_long)
+  
+  env_param[[f]] <- df %>%
+    pivot_longer(cols = 2:ncol(df), names_to = "param", values_to = "value")
+  
+}
+
+# produce df from list
+
+env_param_df <- tibble(do.call(rbind, env_param))
+
+# export
+
+write_csv(env_param_df, here("rda", "data", "env_param_df.csv"))
+
+# find missing environmental parameters 
+
+layers_downloaded <- env_param_df %>%
+  select(param) %>%
+  rename(layer_code = param) %>%
+  unique()
+
+layers_missing <- anti_join(layers, layers_downloaded)
+
+```
+
+### Model Selection
+
+Produce data frame of environmental variables and latitude for each sample and use model selection to determine which are most correlated with genetic data. A model is defined and a scope of models are considered.
+
+```{r, warning=FALSE}
+
+# import tidy env parameter df
+
+env_param_df <- read_csv(here("rda", "data", "env_param_df.csv")) %>%
+  rename(layer_code = param) %>% 
+  left_join(., layers, by = "layer_code") %>% 
+  select(hiseq_id, layer_code, value, set, description) %>% 
+  rename(param = layer_code) %>% 
+  select(hiseq_id, param, value) %>%
+  filter(param != "BO2_dissoxmax_bdmax") # remove the variable not cooperating
+
+# produce yoy_strata_env, including jittered lats and longs
+
+env_param <- env_param_df %>%
+  group_by(param) %>%
+  pivot_wider(names_from = "param", values_from = "value")
+
+yoy_strata_env <- left_join(yoy_strata, env_param, by = "hiseq_id")
+
+write_csv(yoy_strata_env, here("rda", "data", "yoy_strata_env.csv"))
+
+# export df of variables used in model selection
+
+env_variables <- env_param_df %>% 
+  select(param) %>% 
+  distinct() %>% 
+  rename(layer_code = param) %>% 
+  left_join(., layers) %>% 
+  rename(variable_name = layer_code) %>% 
+  write_csv(here("rda", "results", "env_variables_table_s1.csv"))
+
+```
+
+Use Andrew's revised version of `ordiR2step.R` to identify the environmental parameters that are most significantly correlated with the genetic data, but that have vif values < 3. 
+
+```{r, eval=FALSE}
+
+# run initial rda with all parameters (minus one that is acting strange)
+
+temp <- env_param %>%
+  column_to_rownames("hiseq_id")
+
+rda.env <- rda(allele_counts ~ ., temp, scale = TRUE)
+
+source(here("rda", "code", "ordiR2step.R"))
+
+stp.env <- ordiR2step_atf(rda(allele_counts ~ 1, temp), 
+                   scope = formula(rda.env), 
+                   R2scope = T,
+                   Pin = 0.01,
+                   Pout = 0.1,
+                   direction="forward", 
+                   R2permutations = 1000,
+                   parallel = 25)
+
+env_selected <- names(stp.env$terminfo$ordered)
+
+# add description
+
+env_selected_descrip <- as_tibble_col(env_selected, column_name = "layer_code") %>%
+  left_join(., layers)
+
+# export
+
+write_csv(env_selected_descrip, here("rda", "data", "env_selected_descrip.csv"))
+
+```
+
+The following variables are significant and were selected in this order:
+  - BO_ssst_min 
+  - MS_sss_06_5m 
+
+Look at these variables more closely.
+
+```{r}
+
+temp <- read_csv(here("rda", "data", "env_selected_descrip.csv")) %>% 
+  select(layer_code)
+
+# retain selected variables only
+
+env_selected <- env_param %>%
+  column_to_rownames("hiseq_id") %>% 
+  select(all_of(temp$layer_code))
+
+# combine with selected mems and export
+
+mem_select <- read_csv(here("rda", "data", "mem_select.csv"))
+
+temp <- env_selected %>%
+  rownames_to_column("hiseq_id") %>% 
+  left_join(mem_select) %>% 
+  write_csv(here("rda", "data", "env_mem_selected.csv"))
+
+# run initial rda
+
+rda.env <- rda(allele_counts ~ ., env_selected, scale = TRUE)
+
+# run model selection again
+
+stp <- ordiR2step(rda(allele_counts ~ 1, env_selected), 
+                   scope = formula(rda.env), 
+                   R2scope = T,
+                   Pin = 0.01,
+                   Pout = 0.1,
+                   direction="forward", 
+                   R2permutations = 1000,
+                   parallel = 25)
+
+```
+
+Environmental variables plots
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+env_selected_site <- read_csv(here("rda", "data", "yoy_strata_env.csv"))
+
+shark_dist_vec <- read_csv(here("rda", "data", "shark_dist.csv"))
+
+env_means <- left_join(env_selected_site, shark_dist_vec) %>%
+  mutate(dist_km = distance / 1000) %>%
+  mutate(Site = ordered(Site, levels = site_order_fig_rev)) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig_rev)) %>%  
+  select(hiseq_id, BO_sstmin, MS_sss06_5m, latitude, dist_km, Site, Region) %>%
+  group_by(Site, Region) %>%
+  summarise_if(is.numeric, funs(mean(.))) %>%
+  rename(BO_sstmin_mean = BO_sstmin) %>%
+  rename(MS_sss06_5m_mean = MS_sss06_5m) %>%
+  rename(latitude_mean = latitude) %>%
+  rename(dist_mean = dist_km)
+
+# calculate sds
+
+env_sds <- left_join(env_selected_site, shark_dist_vec) %>%
+  mutate(dist_km = distance / 1000) %>%
+  mutate(Site = ordered(Site, levels = site_order_fig_rev)) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig_rev)) %>%  
+  select(hiseq_id, BO_sstmin, MS_sss06_5m, latitude, dist_km, Site, Region) %>%
+  group_by(Site, Region) %>%
+  summarise_if(is.numeric, funs(sd(.))) %>%
+  rename(BO_sstmin_sd = BO_sstmin) %>%
+  rename(MS_sss06_5m_sd = MS_sss06_5m) %>%
+  rename(latitude_sd = latitude) %>%
+  rename(dist_sd = dist_km)
+
+# plot
+
+temp <- left_join(env_means, env_sds)
+
+## temperature
+
+temp_plot <- ggplot(temp, aes(x=dist_mean, y=BO_sstmin_mean, fill=Site, shape = Region)) + 
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  geom_point(stat="identity", size = 5, position = position_jitter(width = 0, height = 0), show.legend = F) +
+  geom_errorbar(aes(ymin = BO_sstmin_mean - BO_sstmin_sd, ymax = BO_sstmin_mean + BO_sstmin_sd), width = 0.5) +
+  scale_x_continuous("Coastal Distance (km)", limits = c(0, 2650), breaks = c(seq(0, 2500, 500)), labels = c(seq(0, 2500, 500))) +
+  scale_y_continuous("Minimum Annual Temperature (°C)", limits = c(11.5, 18.5), breaks = c(seq(12, 18, 1)), labels = c(seq(12, 18, 1))) +
+  scale_fill_manual(values = site_col_rev) +
+  scale_shape_manual(values = shape3_rev) +
+  ggtitle("F") +
+  guides(fill = guide_legend(nrow = 4, override.aes = list(shape=shape11_rev, size = 6, alpha = 1, order = 2)), shape = guide_legend(override.aes = list(size = 6), order = 1)) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+temp_plot
+
+ggsave(here("rda", "results", "temperature_plot.pdf"))
+  
+## salinity
+
+salinity_plot <- ggplot(temp, aes(x=dist_mean, y=MS_sss06_5m_mean, fill=Site, shape = Region)) + 
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  geom_point(stat="identity", size = 5, position = position_jitter(width = 0, height = 0), show.legend = F) +
+  geom_errorbar(aes(ymin = MS_sss06_5m_mean - MS_sss06_5m_sd, ymax = MS_sss06_5m_mean + MS_sss06_5m_sd), width = 0.5) +
+  scale_x_continuous("Coastal Distance (km)", limits = c(0, 2650), breaks = c(seq(0, 2500, 500)), labels = c(seq(0, 2500, 500))) +
+  scale_y_continuous("Mean Salinity in June", limits = c(31, 37), breaks = c(seq(31, 37, 1)), labels = c(seq(31, 37, 1))) +
+  scale_fill_manual(values = site_col_rev) +
+  scale_shape_manual(values = shape3_rev) +
+  ggtitle("G") +
+  guides(fill = guide_legend(nrow = 4, override.aes = list(shape=shape11_rev, size = 6, alpha = 1, order = 2)), shape = guide_legend(override.aes = list(size = 6), order = 1)) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+salinity_plot
+
+ggsave(here("rda", "results", "salinity_plot.pdf"))
+
+```
+
+## Environmental RDA
+
+```{r}
+
+rda.env <- rda(allele_counts ~ ., env_selected, scale = TRUE)
+
+rda.env
+
+RsquareAdj(rda.env)
+
+# assess collinearity 
+
+vif_env <- as.data.frame(vif.cca(rda.env)) %>%
+  rename(vif = `vif.cca(rda.env)`) %>%
+  rownames_to_column("param") %>%
+  arrange(desc(vif))
+
+```
+
+The proportion of variance explained by the environmental predictors is `Proportion` column of `Constrained` row in summary table (equivalent to R2 of multiple regression). 
+
+r squared value (`rda.spa$r.squared`) needs to be adjusted based on the number of predictors because the number of explanatory variables inflates the apparent amount of explained variance due to random correlation. The adjusted R2 values is `rda.spa$adj.r.squared`.
+
+The eigenvalues for the constrained axes reflect the variance explaiend by each canonical axis.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+eig <- as.data.frame(rda.env$CCA$eig) %>%
+  rename(EIGENVALUE = `rda.env$CCA$eig`) %>%
+  rownames_to_column("RDA_AXIS") %>%
+  mutate(VARIANCE = (EIGENVALUE/sum(EIGENVALUE)*100))
+
+ggplot(eig, aes(x = RDA_AXIS, y = VARIANCE)) +
+  geom_bar(stat = "identity", color = "black", fill = "grey") +
+  labs(x = "RDA Axis", y = "% Variance Explained") +
+  theme_standard
+
+summary(eigenvals(rda.env, model = "constrained"))
+
+```
+
+#### Test for Significance
+
+Test for significance using a permutation test to generate a p-value which indicates whether the null hypothesis, environment does not explain genetic variation, should be rejected or not. Rows of unconstrained matrix (genetic data) are repeatedly randomized for `n` permutations. Relationship is considered significant if the observed relationship is stronger than the randomly permuted relationship.
+
+Also test for multicollinearity among variables and remove. 
+
+```{r}
+
+# significant of full model
+
+sign_full <- anova.cca(rda.env, permutations = 1000, parallel = 25)
+
+sign_full
+
+# significance by axis 
+
+sign_axis <- anova.cca(rda.env, by = "axis", permutations = 1000, parallel = 25)
+
+sign_axis
+
+```
+
+**Relationship is significant for the full model and the first the two RDA axes**
+
+Compare constraints (explanatory variables).
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# produce df of renamed environmental variables 
+
+env_rda <- as.data.frame((rda.env$CCA$biplot)) %>%
+  rownames_to_column("param") %>%
+  mutate(param = case_when(param == "BO_sstmin" ~ "temperature", 
+                           param == "MS_sss06_5m" ~ "salinity"))
+
+# Plot RDA1 vs RDA2
+
+ggplot() +
+  geom_hline(yintercept = 0, color = "darkblue", linetype = "dashed", size = 0.75) +
+  geom_vline(xintercept = 0, color = "darkblue", linetype = "dashed", size = 0.75) +
+  geom_segment(data = env_rda, aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+               arrow = arrow(length = unit(0.2, "cm")), 
+               color="darkred", size = 1) +
+  geom_label_repel(data = env_rda, aes(x = RDA1, y = RDA2, label = param)) +
+  labs(x = "RDA 1", y = "RDA 2") +
+  theme_standard
+
+ggsave(here("rda", "data", "env_rda1.2.png"))
+
+```
+
+#### Calculate Loadings
+
+First, compare clustering of individuals based on **weighted average individual scores**, i.e. weighted averages of allele scores that are as similar to linear combination scores as possible. Weights are individual totals of alleles. Use wa-scores to determine how well explanatory variables separate groups of individuals or if explanatory variables can be used to discriminate between groups of individuals.
+
+Use the scaled loadings of the SNPs in the ordination space to determine which alleles appear to be correlated with geographic distances.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# number of axes
+
+n <- ncol(as.data.frame((rda.env$CCA$biplot)))
+
+# produce df of individuals and weighted loading values
+
+inds_rda_env <- rda_indv(rda.env, n) %>%
+  left_join(., yoy_strata) %>%
+  mutate(site_shrt = ordered(site_shrt, levels = site_order_shrt))
+
+# produce df of alleles and scaled loading values
+
+alleles_rda_env <- rda_alleles(rda.env, n) %>%
+  rownames_to_column() %>%
+  select(-rowname)
+
+bw <- 0.01
+n_obs = sum(!is.na(alleles_rda_env$RDA1_SCALED3))
+
+# plot histogram of loadings for RDA1
+
+ggplot(alleles_rda_env, aes(x = RDA1_SCALED3)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(RDA1_SCALED3, na.rm = TRUE)), color = "black", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA1_SCALED3, na.rm = TRUE))*-2.5), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA1_SCALED3, na.rm = TRUE))*2.5), color = "red", linetype = "dashed", size = 1) +
+  stat_function(fun = function(x) 
+    dnorm(x, mean = mean(alleles_rda_env$RDA1_SCALED3), sd = sd(alleles_rda_env$RDA1_SCALED3)) * bw * n_obs, size = 2) +
+  scale_x_continuous("RDA1 Loadings", limits = c(-0.5, 0.5), breaks = seq(-0.4, 0.4, 0.2), labels = seq(-0.4, 0.4, 0.2)) +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggsave(here("rda", "data", "env_rda1_load.png"))
+
+# plot histogram of loadings for RDA2
+
+ggplot(alleles_rda_env, aes(x = RDA2_SCALED3)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(RDA2_SCALED3, na.rm = TRUE)), color = "black", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA2_SCALED3, na.rm = TRUE))*-2.5), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA2_SCALED3, na.rm = TRUE))*2.5), color = "red", linetype = "dashed", size = 1) +
+  stat_function(fun = function(x) 
+    dnorm(x, mean = mean(alleles_rda_env$RDA2_SCALED3), sd = sd(alleles_rda_env$RDA2_SCALED3)) * bw * n_obs, size = 2) +
+  scale_x_continuous("RDA2 Loadings", limits = c(-0.5, 0.5), breaks = seq(-0.4, 0.4, 0.2), labels = seq(-0.4, 0.4, 0.2)) +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggsave(here("rda", "data", "env_rda2_load.png"))
+
+```
+
+The histograms show relatively normal distributions of loading for each RDA axis. Alleles loading at the centre do not show a relationship with environmental differences, but those loading in the tails are more likely to be associated with environment. 
+
+Forester's function identifies alleles that load in the tails of the distributions above based on approximately 2.5 standard deviations from the mean (equivalent to two-tailed p value of 0.012). This threshold can be increased to 3 (p value = 0.0027). 
+
+#### Test for Normal Distribution
+
+Check to see if points follow Normal distribution or not. 
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+temp <- as.data.frame(rda.env$CCA$v) %>%
+  rownames_to_column("Loci")
+
+ggplot(temp, aes(sample = RDA1)) + stat_qq() + stat_qq_line() +
+  labs(y = "RDA1") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggplot(temp, aes(sample = RDA2)) + stat_qq() + stat_qq_line() +
+  labs(y = "RDA2") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+```
+
+#### Identify Environmental Loci
+
+```{r fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
+
+# Forester's function
+
+forester_fun <- function(x,z){
+  lims <- mean(x) + c(-1, 1) * z * sd(x)     # find loadings +/-z sd from mean loading     
+  x[x < lims[1] | x > lims[2]]               # locus names in these tails
+}
+
+# break function down for each RDA axis
+
+## threshold
+
+z <- 3
+
+## axis 1
+
+axis1 <- alleles_rda_env$RDA1_SCALED3
+
+## limits for axis 1
+
+lims1 <- as.data.frame(mean(axis1) + c(-1, 1) * z * sd(axis1)) %>%
+  rename(limits = `mean(axis1) + c(-1, 1) * z * sd(axis1)`)
+
+## alleles for axis 1
+
+alleles1 <- alleles_rda_env %>%
+  filter(RDA1_SCALED3 < lims1[1,] | RDA1_SCALED3 > lims1[2,]) %>%
+  mutate(axis = 1) %>%
+  rename(loading = RDA1_SCALED3)%>%
+  select(ALLELE_NAME, loading, axis)
+  
+## axis 2
+
+axis2 <- alleles_rda_env$RDA2_SCALED3
+
+## limits for axis 2
+
+lims2 <- as.data.frame(mean(axis2) + c(-1, 1) * z * sd(axis2)) %>%
+  rename(limits = `mean(axis2) + c(-1, 1) * z * sd(axis2)`)
+
+## alleles for axis 2
+
+alleles2 <- alleles_rda_env %>%
+  filter(RDA2_SCALED3 < lims2[1,] | RDA2_SCALED3 > lims2[2,]) %>%
+  mutate(axis = 2) %>%
+  rename(loading = RDA2_SCALED3) %>%
+  select(ALLELE_NAME, loading, axis)
+
+# collect alleles for both RDA axes
+
+alleles_all <- rbind(alleles1, alleles2) %>%
+  mutate(ALLELE_NAME = as.character(ALLELE_NAME)) %>%
+  select(axis, ALLELE_NAME, loading)
+
+# number of alleles
+
+alleles_n <- nrow(alleles_all)
+
+# add correlations of each allele to the 2 PCs
+
+foo <- matrix(nrow=(alleles_n), ncol=ncol(env_selected))  # 2 columns for 2 predictors
+colnames(foo) <- c(names(env_selected))
+
+for (i in 1:length(alleles_all$ALLELE_NAME)) {
+  nam <- alleles_all[i,2]
+  snp.gen <- allele_counts[,nam]
+  foo[i,] <- apply(env_selected,2,function(x) cor(x,snp.gen))
+}
+
+alleles_all <- cbind.data.frame(alleles_all, foo)
+
+# find duplicate detections, i.e. alleles that are identified on more than one RDA axis
+
+dupes <- alleles_all %>%
+  group_by(ALLELE_NAME) %>%
+  count() %>%
+  filter(n == 2)
+
+# how many duplicates are there?
+
+nrow(dupes)
+
+# remove duplicates
+
+alleles_all <- alleles_all %>%
+  distinct(ALLELE_NAME, .keep_all = TRUE)
+
+# which predictors each allele are most strongly correlated with
+
+#for (i in 1:length(alleles_all$ALLELE_NAME)) {
+#  bar <- alleles_all[i,]
+#  alleles_all[i,11] <- names(which.max(abs(bar[4:10]))) # gives the variable
+#  alleles_all[i,12] <- max(abs(bar[4:10]))              # gives the correlation
+#}
+
+x <- ncol(env_selected)+3
+y <- ncol(env_selected)+3
+
+a <- ncol(alleles_all)+1
+b <- ncol(alleles_all)+2
+
+for (i in 1:length(alleles_all$ALLELE_NAME)) {
+  bar <- alleles_all[i,]
+  alleles_all[i,a] <- names(which.max(abs(bar[4:x]))) # gives the variable
+  alleles_all[i,b] <- max(abs(bar[4:y]))              # gives the correlation
+}
+
+# rename added columns
+
+alleles_all <- alleles_all %>%
+  rename(predictor = "V6") %>%
+  rename(correlation = "V7")
+
+# plot individuals and alleles
+
+## color neutral and adaptive alleles
+
+neu_all <- anti_join(alleles_rda_env, alleles_all) %>%
+  mutate(predictor = "NO")  %>%
+  select(ALLELE_NAME, RDA1_SCALED3, RDA2_SCALED3, predictor)
+
+temp <- inner_join(alleles_rda_env, alleles_all) %>%
+  select(ALLELE_NAME, RDA1_SCALED3, RDA2_SCALED3, predictor)
+
+temp <- rbind(neu_all, temp)
+
+# rename sites for plotting
+
+inds_rda_env_plot <- inds_rda_env %>%
+    mutate(Sample = case_when(site_shrt %in% "BLB" ~ "Bulls Bay",
+                            site_shrt %in% "SHS" ~ "St. Helena Sound",
+                            site_shrt %in% "PRS" ~ "Port Royal Sound",
+                            site_shrt %in% "TCB" ~ "Terra Ceia Bay",
+                            site_shrt %in% "WAB" ~ "Waccasassa Bay",
+                            site_shrt %in% "APB" ~ "Apalachicola Bay",
+                            site_shrt %in% "MOB" ~ "Mobile Bay",
+                            site_shrt %in% "GAB" ~ "Galveston Bay",
+                            site_shrt %in% "MAB" ~ "Matagorda Bay",
+                            site_shrt %in% "SAB" ~ "San Antonio Bay",
+                            site_shrt %in% "CCB" ~ "Corpus Christi Bay")) %>%
+    mutate(Region = case_when(region %in% "Atl" ~ "Atlantic",
+                            region %in% "EGoM" ~ "Eastern Gulf",
+                            region %in% "WGoM" ~ "Western Gulf")) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig)) %>%
+  mutate(Sample = ordered(Sample, levels = site_order_fig))
+
+# export adaptive loci
+
+env_loci <- alleles_all %>%
+  separate(ALLELE_NAME, into = c("locus", "allele"), sep = "[.]", remove = TRUE) %>%
+  select(locus, predictor) %>%
+  group_by(locus) %>%
+  unique()
+
+# number of loci per parameter
+
+loci_pred_n <- env_loci %>%
+  group_by(predictor) %>%
+  count() %>%
+  arrange(desc(n))
+
+# export
+
+write_delim(env_loci, here("rda", "results", "env_loci_z3.txt"), delim = "\t")
+
+```
+
+#### Plot Samples
+
+```{r fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
+
+site_col_long <- c("#d7301f", "#b30000", "#7f0000", "#4d004b", "#810f7c", "#88419d", "#8c96c6", "#9ecae1", "#4292c6", "#08519c", "#08306b")
+
+# plot RDA1 vs RDA2
+
+env_rda_plot <- ggplot() +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+ # stat_ellipse(data = inds_rda_env_plot, aes(x = RDA1_WA_SCALED3, y= RDA2_WA_SCALED3, color = Site), size = 1, level = 0.95, show.legend = F) +
+  geom_segment(data = env_rda, aes(x = 0, y = 0, xend = RDA1*-1, yend = RDA2*-1), 
+               arrow = arrow(length = unit(0.2, "cm")), color="black", size = 1) +
+  geom_point(data = inds_rda_env_plot, aes(x = RDA1_WA_SCALED3*-1, y= RDA2_WA_SCALED3*-1, shape = Region, fill = Sample), size = 5, position = position_jitter(width = 0, height = 0), show.legend = F) +
+  geom_label_repel(data = env_rda, aes(x = RDA1*-1, y = RDA2*-1, label = param), size = 4, position = position_nudge(y = c(0, 0), x = c(0, 0))) +
+  scale_x_continuous(breaks = c(seq(-1.5, 1.5, 0.5)), labels = c(seq(-1.5, 1.5, 0.5))) +
+  scale_y_continuous(breaks = c(seq(-2, 1.5, 0.5)), labels = c(seq(-2, 1.5, 0.5))) +
+  labs(x = paste("RDA1:", round((eig[1, 3]), digits = 3), "%"), 
+       y = paste("RDA2:", round((eig[2, 3]), digits = 3), "%")) +
+  scale_fill_manual(values = site_col_long) +
+  scale_color_manual(values = site_col_long) +
+  scale_shape_manual(values = shape3) +
+  ggtitle("B") +
+  guides(fill = guide_legend(override.aes = list(shape=shape11, size = 8, alpha = 1), order = 1), shape = guide_legend(override.aes = list(size = 8), order = 1), size = FALSE) +
+  theme_standard +
+  theme(legend.text=element_text(size=14), legend.key.height = unit(1.0, "cm"),  legend.position = "right", legend.box = "vertical", legend.title=element_text(size=16), axis.text=element_text(size=12), axis.title=element_text(size=16), legend.spacing.y = unit(0.2, "cm"), plot.title = element_text(size=26))
+
+env_rda_plot
+
+ggsave(here("rda", "results", "env_rda_biplot.png"))
+
+ggsave(here("rda", "results", "env_rda_biplot.pdf"))
+
+```
+
+## Compare Spatial & Environmental Loci
+
+```{r}
+
+spa_loci <- read_delim(here("rda", "results", "spa_loci_z3.txt"), delim = "\t")
+
+env_loci <- read_delim(here("rda", "results", "env_loci_z3.txt"), delim = "\t")
+
+# loci driving spatial and environmental patterns
+
+spa_env_loci <- rbind(spa_loci, env_loci) %>% 
+  group_by(locus) %>% 
+  filter(n()>1) %>% 
+  select(locus) %>% 
+  distinct()
+
+# loci in all
+
+ada_loci <- read_delim(here("rda", "results", "env_loci_prda_for_z3.txt"), delim = "\t") %>% 
+  mutate(predictor = "prda") %>% 
+  rename(locus = LOCUS)
+
+
+all_loci <- spa_env_prda_loci %>% 
+  group_by(locus) %>% 
+  count() %>% 
+  left_join(., ada_loci) %>% 
+  filter(n == 2) %>% 
+  drop_na(predictor)
+
+
+  filter(n()>3) %>% 
+  select(locus) %>% 
+  distinct()
+
+# export
+  
+both_loci %>% 
+  distinct(locus) %>% 
+  write_delim(., here("rda", "results", "both_loci_z3.txt"), delim = "\t")
+
+```
+
+# Figures
+
+Spatial and environmental RDA biplots.
+
+```{r fig.height=7, fig.width=16.25, message=FALSE, warning=FALSE}
+
+spa_rda_plot + env_rda_plot
+
+ggsave(here("rda", "results", "spa_env_rda_biplots.png"))
+
+```
+
+Linear regression plots
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# neutral fst vs coastal distance
+
+lbl_neu <- read_csv(here("pop_str", "results", "lbl_pwfst", "lbl_neu_df.csv"))
+
+temp <- lbl_neu %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+# plot
+
+fst_dist <- ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  scale_x_continuous(limits = c(700, 1500), breaks = seq(750, 1500, 250), labels= seq(750, 1500, 250)) +
+ # scale_y_continuous(limits = c(-0.00075, 0.0016), breaks = seq(0, 0.0015, 0.0005), labels= seq(0, 0.0015, 0.0005)) +
+  labs(x = "Coastal Distance (km)", y = expression(paste("Pairwise Neutral ", italic(F)[ST]))) +
+  ggtitle("E") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+fst_dist
+
+ggsave(here("rda", "results", "fst_dist.pdf"))
+
+# adaptive fst vs latitude
+
+lbl_ada <- read_csv(here("pop_str", "results", "lbl_pwfst", "lbl_ada_df.csv"))
+
+lat_diff <- read_csv(here("rda", "data", "lat_diff.csv"))
+
+fst_ada_df <- lbl_ada %>% 
+  cbind(lat_diff) %>% 
+  drop_na(pwFST, Comparison)
+
+temp <- fst_ada_df %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+# plot
+
+fst_lat <- ggplot(data = temp, aes(x = lat_diff, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  scale_x_continuous(limits = c(0.2, 2.5), breaks = seq(0.5, 2.5, 0.5), labels= seq(0.5, 2.5, 0.5)) +
+  scale_y_continuous(limits = c(-0.004, 0.0275), breaks = seq(0, 0.025, 0.005), labels= seq(0, 0.025, 0.005)) +
+  labs(x = "Absolute Difference in Degrees Latitude", y = expression(paste("Pairwise Adaptive ", italic(F)[ST]))) +
+  ggtitle("H") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+fst_lat
+
+ggsave(here("rda", "results", "fst_lat.pdf"))
+
+```
+
+Produce neutral plots for Atlantic-Eastern Gulf and Atlantic-Western Gulf.
+
+```{r fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+
+# Atl-EGoM
+
+temp <- lbl_neu %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "Atl" & region2 =="EGoM" ~ "Atl-EGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+# plot
+
+fst_dist_1 <- ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+ #scale_x_continuous(limits = c(700, 1500), breaks = seq(750, 1500, 250), labels= seq(750, 1500, 250)) +
+ # scale_y_continuous(limits = c(-0.00075, 0.0016), breaks = seq(0, 0.0015, 0.0005), labels= seq(0, 0.0015, 0.0005)) +
+  labs(x = "Coastal Distance (km)", y = expression(paste("Pairwise Neutral ", italic(F)[ST]))) +
+  ggtitle("A") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+# Atl-WGoM
+
+temp <- lbl_neu %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "Atl" & region2 =="WGoM" ~ "Atl-WGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+# plot
+
+fst_dist_2 <- ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+ # sew_x_continuous(limits = c(700, 1500), breaks = seq(750, 1500, 250), labels= seq(750, 1500, 250)) +
+ # scale_y_continuous(limits = c(-0.00075, 0.0016), breaks = seq(0, 0.0015, 0.0005), labels= seq(0, 0.0015, 0.0005)) +
+  labs(x = "Coastal Distance (km)", y = expression(paste("Pairwise Neutral ", italic(F)[ST]))) +
+  ggtitle("B") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+fst_dist_1 + fst_dist_2
+
+ggsave(here("rda", "results", "fst_dist_atl_egom_wgom.png"))
+
+```
+
+Produce adaptive plots for Atlantic-Eastern Gulf and Atlantic-Western Gulf.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Atl-EGoM
+
+lbl_ada <- read_csv(here("pop_str", "results", "lbl_pwfst", "lbl_ada_df.csv"))
+
+lat_diff <- read_csv(here("rda", "data", "lat_diff.csv"))
+
+fst_ada_df <- lbl_ada %>% 
+  cbind(lat_diff) %>% 
+  drop_na(pwFST, Comparison)
+
+temp <- fst_ada_df %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "Atl" & region2 =="EGoM" ~ "Atl-EGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+# plot
+
+fst_lat <- ggplot(data = temp, aes(x = lat_diff, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+ # scale_x_continuous(limits = c(0.2, 2.5), breaks = seq(0.5, 2.5, 0.5), labels= seq(0.5, 2.5, 0.5)) +
+  #scale_y_continuous(limits = c(-0.004, 0.0275), breaks = seq(0, 0.025, 0.005), labels= seq(0, 0.025, 0.005)) +
+  labs(x = "Absolute Difference in Degrees Latitude", y = expression(paste("Pairwise Adaptive ", italic(F)[ST]))) +
+  ggtitle("C") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+fst_lat
+
+ggsave(here("rda", "results", "fst_lat_atl_egom.png"))
+
+# Atl-WGoM
+
+lbl_ada <- read_csv(here("pop_str", "results", "lbl_pwfst", "lbl_ada_df.csv"))
+
+lat_diff <- read_csv(here("rda", "data", "lat_diff.csv"))
+
+fst_ada_df <- lbl_ada %>% 
+  cbind(lat_diff) %>% 
+  drop_na(pwFST, Comparison)
+
+temp <- fst_ada_df %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "Atl" & region2 =="WGoM" ~ "Atl-WGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+# plot
+
+fst_lat <- ggplot(data = temp, aes(x = lat_diff, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+ # scale_x_continuous(limits = c(0.2, 2.5), breaks = seq(0.5, 2.5, 0.5), labels= seq(0.5, 2.5, 0.5)) +
+  #scale_y_continuous(limits = c(-0.004, 0.0275), breaks = seq(0, 0.025, 0.005), labels= seq(0, 0.025, 0.005)) +
+  labs(x = "Absolute Difference in Degrees Latitude", y = expression(paste("Pairwise Adaptive ", italic(F)[ST]))) +
+  ggtitle("D") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(plot.title = element_text(size = 20), axis.text=element_text(size=14), axis.title=element_text(size=16))
+
+fst_lat
+
+ggsave(here("rda", "results", "fst_lat_atl_wgom.png"))
+
+```
+
+
+# Partial RDA
+
+What is the effect of environment when conditioned for space, and vice versa?
+
+```{r message=false}
+
+# env
+
+prda.env <- rda(allele_counts ~ BO_sstmin + MS_sss06_5m + Condition(MEM1 + MEM2), mem_env_select, scale = TRUE)
+
+prda.env
+
+RsquareAdj(prda.env)
+
+# spa
+
+prda.spa <- rda(allele_counts ~ MEM1 + MEM2 + Condition(BO_sstmin + MS_sss06_5m), mem_env_select, scale = TRUE)
+
+prda.spa
+
+RsquareAdj(prda.spa)
+
+```
+
+## Environmental pRDA
+
+The proportion of variance explained by the environmental predictors is `Proportion` column of `Constrained` row in summary table (equivalent to R2 of multiple regression). 
+r squared value (`prda.env$r.squared`) needs to be adjusted based on the number of predictors because the number of explanatory variables inflates the apparent amount of explained variance due to random correlation. The adjusted R2 values is `prda.env$adj.r.squared`.
+
+The eigenvalues for the constrained axes reflect the variance explaiend by each canonical axis.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# env
+
+eig <- as.data.frame(prda.env$CCA$eig) %>%
+  rename(EIGENVALUE = `prda.env$CCA$eig`) %>%
+  rownames_to_column("RDA_AXIS") %>%
+  mutate(VARIANCE = (EIGENVALUE/sum(EIGENVALUE)*100))
+
+ggplot(eig, aes(x = RDA_AXIS, y = VARIANCE)) +
+  geom_bar(stat = "identity", color = "black", fill = "grey") +
+  labs(x = "RDA Axis", y = "% Variance Explained") +
+  theme_standard
+
+summary(eigenvals(prda.env, model = "constrained"))
+
+```
+
+#### Test for Significance
+
+Test for significance using a permutation test to generate a p-value which indicates whether the null hypothesis, environment does not explain genetic variation, should be rejected or not. Rows of unconstrained matrix (genetic data) are repeatedly randomized for `n` permutations. Relationship is considered significant if the observed relationship is stronger than the randomly permuted relationship.
+
+Also test for multicollinearity among variables and remove. 
+
+```{r}
+
+# env
+
+# significant of full model
+
+sign_full <- anova.cca(prda.env, permutations = 1000, parallel = 25)
+
+sign_full
+
+# significance by axis 
+
+sign_axis <- anova.cca(prda.env, by = "axis", permutations = 1000, parallel = 25)
+
+sign_axis
+
+```
+
+**Relationship is significant for the full model and the first the two RDA axes**
+
+Compare constraints (explanatory variables).
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# produce df of renamed environmental variables 
+
+env_prda <- as.data.frame((prda.env$CCA$biplot)) %>%
+  rownames_to_column("layer_code") %>%
+  mutate(param = case_when(layer_code == "BO_sstmin" ~ "temperature", 
+                           layer_code == "MS_sss06_5m" ~ "salinity"))
+
+# Plot RDA1 vs RDA2
+
+ggplot() +
+  geom_hline(yintercept = 0, color = "darkblue", linetype = "dashed", size = 0.75) +
+  geom_vline(xintercept = 0, color = "darkblue", linetype = "dashed", size = 0.75) +
+  geom_segment(data = env_prda, aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+               arrow = arrow(length = unit(0.2, "cm")), 
+               color="darkred", size = 1) +
+  geom_label_repel(data = env_prda, aes(x = RDA1, y = RDA2, label = param)) +
+  labs(x = "RDA 1", y = "RDA 2") +
+  theme_standard
+
+ggsave(here("rda", "data", "env_prda1.2.png"))
+
+```
+
+#### Calculate Loadings
+
+First, compare clustering of individuals based on **weighted average individual scores**, i.e. weighted averages of allele scores that are as similar to linear combination scores as possible. Weights are individual totals of alleles. Use wa-scores to determine how well explanatory variables separate groups of individuals or if explanatory variables can be used to discriminate between groups of individuals.
+
+Use the scaled loadings of the SNPs in the ordination space to determine which alleles appear to be correlated.
+
+```{r fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+
+# number of axes
+
+n <- ncol(as.data.frame((prda.env$CCA$biplot)))
+
+# produce df of individuals and weighted loading values
+
+inds_prda_env <- rda_indv(prda.env, n) %>%
+  left_join(yoy_strata) %>%
+  mutate(site_shrt = ordered(site_shrt, levels = site_order_shrt))
+
+# produce df of alleles and scaled loading values
+
+alleles_prda_env <- rda_alleles(prda.env, n) %>%
+  rownames_to_column() %>%
+  select(-rowname)
+
+bw <- 0.01
+n_obs = sum(!is.na(alleles_prda_env$RDA1_SCALED3))
+
+# plot histogram of loadings for RDA1
+
+p1 <- ggplot(alleles_prda_env, aes(x = RDA1_SCALED3)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(RDA1_SCALED3, na.rm = TRUE)), color = "black", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA1_SCALED3, na.rm = TRUE))*-3), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA1_SCALED3, na.rm = TRUE))*3), color = "red", linetype = "dashed", size = 1) +
+ # stat_function(fun = function(x) 
+  #  dnorm(x, mean = mean(alleles_prda_env$RDA1_SCALED3), sd = sd(alleles_prda_env$RDA1_SCALED3)) * bw * n_obs, size = 2) +
+  scale_x_continuous("Allele Loading", limits = c(-0.5, 0.5), breaks = seq(-0.4, 0.4, 0.2), labels = seq(-0.4, 0.4, 0.2)) +
+  scale_y_continuous("Number of Alleles", limits = c(0, 500), breaks = seq(0, 500, 100), labels = seq(0, 500, 100)) +
+  ggtitle("A") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=18), plot.title = element_text(size=26))
+
+
+# plot histogram of loadings for RDA2
+
+p2 <- ggplot(alleles_prda_env, aes(x = RDA2_SCALED3)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(RDA2_SCALED3, na.rm = TRUE)), color = "black", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA2_SCALED3, na.rm = TRUE))*-3), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (sd(RDA2_SCALED3, na.rm = TRUE))*3), color = "red", linetype = "dashed", size = 1) +
+ # stat_function(fun = function(x) 
+   # dnorm(x, mean = mean(alleles_prda_env$RDA2_SCALED3), sd = sd(alleles_prda_env$RDA2_SCALED3)) * bw * n_obs, size = 2) +
+  scale_x_continuous("Allele Loading", limits = c(-0.5, 0.5), breaks = seq(-0.4, 0.4, 0.2), labels = seq(-0.4, 0.4, 0.2)) +
+  scale_y_continuous("Number of Alleles", limits = c(0, 500), breaks = seq(0, 500, 100), labels = seq(0, 500, 100)) +
+  ggtitle("B") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=18), plot.title = element_text(size=26))
+
+p1 + p2
+
+ggsave(here("rda", "results", "env_prda_loading.png"))
+
+```
+
+The histograms show relatively normal distributions of loading for each RDA axis. Alleles loading at the centre do not show a relationship with environmental differences, but those loading in the tails are more likely to be associated with environment. 
+
+Forester's function identifies alleles that load in the tails of the distributions above based on approximately 2.5 standard deviations from the mean (equivalent to two-tailed p value of 0.012). This threshold can be increased to 3 (p value = 0.0027). 
+
+#### Test for Normal Distribution
+
+Check to see if points follow Normal distribution or not. 
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+temp <- as.data.frame(prda.env$CCA$v) %>%
+  rownames_to_column("loci")
+
+ggplot(temp, aes(sample = RDA1)) + stat_qq() + stat_qq_line() +
+  labs(y = "RDA1") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggplot(temp, aes(sample = RDA2)) + stat_qq() + stat_qq_line() +
+  labs(y = "RDA2") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+```
+
+#### Identify Environmental Loci
+
+##### Forester's Method
+
+```{r fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
+
+# Forester's function
+
+forester_fun <- function(x,z){
+  lims <- mean(x) + c(-1, 1) * z * sd(x)     # find loadings +/-z sd from mean loading     
+  x[x < lims[1] | x > lims[2]]               # locus names in these tails
+}
+
+# break function down for each RDA axis
+
+## threshold
+
+z <- 3
+
+## axis 1
+
+axis1 <- alleles_prda_env$RDA1_SCALED3
+
+## limits for axis 1
+
+lims1 <- as.data.frame(mean(axis1) + c(-1, 1) * z * sd(axis1)) %>%
+  rename(limits = `mean(axis1) + c(-1, 1) * z * sd(axis1)`)
+
+## alleles for axis 1
+
+alleles1 <- alleles_prda_env %>%
+  filter(RDA1_SCALED3 < lims1[1,] | RDA1_SCALED3 > lims1[2,]) %>%
+  mutate(axis = 1) %>%
+  rename(loading = RDA1_SCALED3)%>%
+  select(ALLELE_NAME, loading, axis)
+  
+## axis 2
+
+axis2 <- alleles_prda_env$RDA2_SCALED3
+
+## limits for axis 2
+
+lims2 <- as.data.frame(mean(axis2) + c(-1, 1) * z * sd(axis2)) %>%
+  rename(limits = `mean(axis2) + c(-1, 1) * z * sd(axis2)`)
+
+## alleles for axis 2
+
+alleles2 <- alleles_prda_env %>%
+  filter(RDA2_SCALED3 < lims2[1,] | RDA2_SCALED3 > lims2[2,]) %>%
+  mutate(axis = 2) %>%
+  rename(loading = RDA2_SCALED3) %>%
+  select(ALLELE_NAME, loading, axis)
+
+# collect alleles for both RDA axes
+
+alleles_all <- rbind(alleles1, alleles2) %>%
+  mutate(ALLELE_NAME = as.character(ALLELE_NAME)) %>%
+  select(axis, ALLELE_NAME, loading)
+
+# number of alleles
+
+alleles_n <- nrow(alleles_all)
+
+# add correlations of each allele to the 2 PCs
+
+foo <- matrix(nrow=(alleles_n), ncol=ncol(env_selected))  # 2 columns for 2 predictors
+colnames(foo) <- c(names(env_selected))
+
+for (i in 1:length(alleles_all$ALLELE_NAME)) {
+  nam <- alleles_all[i,2]
+  snp.gen <- allele_counts[,nam]
+  foo[i,] <- apply(env_selected,2,function(x) cor(x,snp.gen))
+}
+
+alleles_all <- cbind.data.frame(alleles_all, foo)
+
+# find duplicate detections, i.e. alleles that are identified on more than one RDA axis
+
+dupes <- alleles_all %>%
+  group_by(ALLELE_NAME) %>%
+  count() %>%
+  filter(n == 2)
+
+# how many duplicates are there?
+
+nrow(dupes)
+
+# remove duplicates
+
+alleles_all <- alleles_all %>%
+  distinct(ALLELE_NAME, .keep_all = TRUE)
+
+# which predictors each allele are most strongly correlated with
+
+#for (i in 1:length(alleles_all$ALLELE_NAME)) {
+#  bar <- alleles_all[i,]
+#  alleles_all[i,11] <- names(which.max(abs(bar[4:10]))) # gives the variable
+#  alleles_all[i,12] <- max(abs(bar[4:10]))              # gives the correlation
+#}
+
+x <- ncol(env_selected)+3
+y <- ncol(env_selected)+3
+
+a <- ncol(alleles_all)+1
+b <- ncol(alleles_all)+2
+
+for (i in 1:length(alleles_all$ALLELE_NAME)) {
+  bar <- alleles_all[i,]
+  alleles_all[i,a] <- names(which.max(abs(bar[4:x]))) # gives the variable
+  alleles_all[i,b] <- max(abs(bar[4:y]))              # gives the correlation
+}
+
+# rename added columns
+
+alleles_all <- alleles_all %>%
+  rename(predictor = "V6") %>%
+  rename(correlation = "V7")
+
+# plot individuals and alleles
+
+## color neutral and adaptive alleles
+
+neu_all <- anti_join(alleles_prda_env, alleles_all) %>%
+  mutate(predictor = "NO")  %>%
+  select(ALLELE_NAME, RDA1_SCALED3, RDA2_SCALED3, predictor)
+
+temp <- inner_join(alleles_prda_env, alleles_all) %>%
+  select(ALLELE_NAME, RDA1_SCALED3, RDA2_SCALED3, predictor)
+
+temp <- rbind(neu_all, temp)
+
+# rename sites for plotting
+
+inds_prda_env_plot <- inds_prda_env %>%
+    mutate(Sample = case_when(site_shrt %in% "BLB" ~ "Bulls Bay",
+                            site_shrt %in% "SHS" ~ "St. Helena Sound",
+                            site_shrt %in% "PRS" ~ "Port Royal Sound",
+                            site_shrt %in% "TCB" ~ "Terra Ceia Bay",
+                            site_shrt %in% "WAB" ~ "Waccasassa Bay",
+                            site_shrt %in% "APB" ~ "Apalachicola Bay",
+                            site_shrt %in% "MOB" ~ "Mobile Bay",
+                            site_shrt %in% "GAB" ~ "Galveston Bay",
+                            site_shrt %in% "MAB" ~ "Matagorda Bay",
+                            site_shrt %in% "SAB" ~ "San Antonio Bay",
+                            site_shrt %in% "CCB" ~ "Corpus Christi Bay")) %>%
+    mutate(Region = case_when(region %in% "Atl" ~ "Atlantic",
+                            region %in% "EGoM" ~ "Eastern Gulf",
+                            region %in% "WGoM" ~ "Western Gulf")) %>%
+  mutate(Region = ordered(Region, levels = region_order_fig)) %>%
+  mutate(Sample = ordered(Sample, levels = site_order_fig))
+
+# export adaptive loci
+
+env_loci <- alleles_all %>%
+  separate(ALLELE_NAME, into = c("LOCUS", "allele"), sep = "[.]", remove = TRUE) %>%
+  select(LOCUS, predictor)
+
+# number of loci per parameter
+
+loci_pred_n <- env_loci %>%
+  group_by(predictor) %>%
+  count() %>%
+  arrange(desc(n))
+
+# export
+
+env_loci %>% 
+  distinct(LOCUS) %>% 
+  write_delim(here("rda", "results", "env_loci_prda_for_z3.txt"), delim = "\t")
+
+```
+
+# Export Files
+
+For Atlantic and Gulf indiviudals, export `genepop` files for neutral loci (without fst outlier and environmentally-associated loci) and environmentally-associated loci.
+
+```{r message = FALSE}
+
+# import YOY strata and genepop
+
+yoy_strata <- read_csv(here("yoy_strata.csv"))
+
+yoy.gen <- read.genepop(file = here("yoy_site.gen"), ncode = 3L, quiet = FALSE)
+
+inds <- as.data.frame(indNames(yoy.gen)) %>%
+  rename(hiseq_id = `indNames(yoy.gen)`)
+
+yoy_strata <- left_join(inds, yoy_strata) # WHENEVER JOINING INDS TO STRATA, ALWAYS HAVE INDS ON THE LEFT SO THE ORDER OF GENEPOP IS MAINTAINED! 
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# import and remove randomly sampled siblings
+
+random_sibs <- read_csv(here("related", "results", "sibs_random.csv"))
+
+remove_sibs <- random_sibs$hiseq_id_2
+
+yoy_wosibs.gen <- gen.ind.rem.Ind(yoy.gen, remove_sibs)
+
+wo_inds <- as.data.frame(indNames(yoy_wosibs.gen)) %>%
+  rename(hiseq_id = `indNames(yoy_wosibs.gen)`)
+
+yoy_wosibs_strata <- left_join(wo_inds, yoy_strata)
+
+strata(yoy_wosibs.gen) <- yoy_wosibs_strata
+
+setPop(yoy_wosibs.gen) <- ~site_shrt
+
+# adaptive loci
+
+for_loci <- read_delim(here("rda", "results", "env_loci_prda_for_z3.txt"), delim = "\t")
+
+all_loci <- read_delim(here("rda", "results", "env_loci_prda_all.txt"), delim = "\t")
+
+# produce neutral datasets
+
+yoy_neu.gen <- genind.rem.loci(yoy.gen, for_loci$LOCUS)
+
+strata(yoy_neu.gen) <- yoy_strata
+
+setPop(yoy_neu.gen) <- ~site_shrt
+
+# without sibs
+
+yoy_wosibs_neu.gen <- genind.rem.loci(yoy_wosibs.gen, for_loci$LOCUS)
+
+strata(yoy_wosibs_neu.gen) <- yoy_wosibs_strata
+
+setPop(yoy_wosibs_neu.gen) <- ~site_shrt
+
+# produce adaptive dataset
+
+remove_loci_for <- as.data.frame(locNames(yoy.gen)) %>%
+  rename(LOCUS = `locNames(yoy.gen)`) %>%
+  anti_join(for_loci)
+
+remove_loci_all <- as.data.frame(locNames(yoy.gen)) %>%
+  rename(LOCUS = `locNames(yoy.gen)`) %>%
+  anti_join(all_loci)
+
+# forester outliers
+
+yoy_ada_for.gen <- genind.rem.loci(yoy.gen, remove_loci_for$LOCUS)
+
+strata(yoy_ada_for.gen) <- yoy_strata
+
+setPop(yoy_ada_for.gen) <- ~site_shrt
+
+# all outliers
+
+yoy_ada_all.gen <- genind.rem.loci(yoy.gen, remove_loci_all$LOCUS)
+
+strata(yoy_ada_all.gen) <- yoy_strata
+
+setPop(yoy_ada_all.gen) <- ~site_shrt
+
+# produce neutral datasets
+
+# forester outliers
+
+yoy_neu_for.gen <- genind.rem.loci(yoy.gen, for_loci$LOCUS)
+
+strata(yoy_neu_for.gen) <- yoy_strata
+
+setPop(yoy_neu_for.gen) <- ~site_shrt
+
+# all outliers
+
+yoy_neu_all.gen <- genind.rem.loci(yoy.gen, all_loci$LOCUS)
+
+strata(yoy_neu_all.gen) <- yoy_strata
+
+setPop(yoy_neu_all.gen) <- ~site_shrt
+
+# redo without randomly sampled siblings
+
+## produce adaptive datasets
+
+### forester outliers
+
+yoy_wosibs_ada_for.gen <- genind.rem.loci(yoy_wosibs.gen, remove_loci_for$LOCUS)
+
+strata(yoy_wosibs_ada_for.gen) <- yoy_wosibs_strata
+
+setPop(yoy_wosibs_ada_for.gen) <- ~site_shrt
+
+### all outliers
+
+yoy_wosibs_ada_all.gen <- genind.rem.loci(yoy_wosibs.gen, remove_loci_all$LOCUS)
+
+strata(yoy_wosibs_ada_all.gen) <- yoy_wosibs_strata
+
+setPop(yoy_wosibs_ada_all.gen) <- ~site_shrt
+
+## produce neutral datasets
+
+### forester outliers
+
+yoy_wosibs_neu_for.gen <- genind.rem.loci(yoy_wosibs.gen, for_loci$LOCUS)
+
+strata(yoy_wosibs_neu_for.gen) <- yoy_wosibs_strata
+
+setPop(yoy_wosibs_neu_for.gen) <- ~site_shrt
+
+### all outliers
+
+yoy_wosibs_neu_all.gen <- genind.rem.loci(yoy_wosibs.gen, all_loci$LOCUS)
+
+strata(yoy_wosibs_neu_all.gen) <- yoy_wosibs_strata
+
+setPop(yoy_wosibs_neu_all.gen) <- ~site_shrt
+
+```
+
+Export files by site
+
+```{r, message = FALSE}
+
+# export files by Site
+
+## neutral
+
+writeGenPop(yoy_neu_for.gen, file.name = here("yoy_neu.gen"), comment = "yoy_neu.gen")
+
+#writeGenPop(yoy_neu_all.gen, file.name = here("pop_str", "data", "yoy_neu_all.gen"), comment = "yoy_neu_all.gen")
+
+## adaptive
+
+writeGenPop(yoy_ada_for.gen, file.name = here("yoy_ada.gen"), comment = "yoy_ada.gen")
+
+#writeGenPop(yoy_ada_all.gen, file.name = here("pop_str", "data", "yoy_ada_all.gen"), comment = "yoy_ada_all.gen")
+
+## neutral wo sibs
+
+writeGenPop(yoy_wosibs_neu_for.gen, file.name = here("yoy_wosibs_neu.gen"), comment = "yoy_wosibs_neu.gen")
+
+#writeGenPop(yoy_wosibs_neu_all.gen, file.name = here("pop_str", "data", "yoy_wosibs_neu_all.gen"), comment = "yoy_wosibs_neu_all.gen")
+
+## adaptive  wo sibs
+
+writeGenPop(yoy_wosibs_ada_for.gen, file.name = here("yoy_wosibs_ada.gen"), comment = "yoy_wosibs_ada.gen")
+
+#writeGenPop(yoy_wosibs_ada_all.gen, file.name = here("pop_str", "data", "yoy_wosibs_ada_all.gen"), comment = "yoy_wosibs_ada_all.gen")
+
+```
+
+Convert exported `genepop` files to `Arlequin` files using `PGDSpider`. 
+  
+```{bash, eval=FALSE, warning = F}
+
+cd /home/dswift/Projects/us_blacktips
+
+ls *_neu.gen | cut -f1 -d"." | while read i; do java -jar /usr/local/bin/PGDSpider2-cli.jar -inputfile $i.gen -inputformat GENEPOP -outputfile pop_str/data/$i.arp -outputformat ARLEQUIN -spid pop_str/data/genepop-arl_SNPs.spid ; done
+
+ls *_ada.gen | cut -f1 -d"." | while read i; do java -jar /usr/local/bin/PGDSpider2-cli.jar -inputfile $i.gen -inputformat GENEPOP -outputfile pop_str/data/$i.arp -outputformat ARLEQUIN -spid pop_str/data/genepop-arl_SNPs.spid ; done
+
+rm PGDSpider-cli.log
+
+
+```
+
+# Packages
+
+Packages used in this analysis. 
+
+```{r}
+
+subset(data.frame(sessioninfo::package_info()), attached==TRUE, c(package, loadedversion))
+
+```

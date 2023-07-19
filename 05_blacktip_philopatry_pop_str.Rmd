@@ -1,0 +1,1003 @@
+---
+title: "Population Structure: YOY Blacktips in US. Waters"
+author: "DG Swift"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+Assess population structure using `Arlequin`, PCA, and DAPC.
+  
+# Environment
+  
+```{r, message=FALSE}
+
+.libPaths("/usr/lib64/R/library")
+
+# invalidate cache when the package version changes
+
+knitr::opts_chunk$set(
+  root.dir = "~/Projects/us_blacktips/pop_str",
+	message = FALSE,
+	warning = FALSE,
+	cache.extra = packageVersion("tint"),
+	tidy = FALSE,
+	echo = FALSE)
+
+options(htmltools.dir.version = FALSE)
+
+# conflicts
+
+library(conflicted)
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("s.label", "adegraphics")
+conflict_prefer("s.value", "adegraphics")
+conflict_prefer("scalebar", "raster")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("extract", "raster")
+conflict_prefer("degree", "igraph")
+
+# packages
+
+.libPaths("/usr/lib64/R/library")
+
+library(tidyverse)
+library(adegenet)
+library(ggthemes)
+library(tufte)
+library(tint)
+library(knitr)
+library(gdata)
+library(zvau)
+library(patchwork)
+library(here)
+library(readxl)
+
+# source scripts
+
+source("~/code/ggplot.R")
+source("~/code/genind.R")
+source("~/code/PCA.R")
+source("~/code/DAPC.R")
+
+# orders, colors, shapes
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+site_order <- c("Bulls_Bay", 
+                "St._Helena_Sound",
+                "Port_Royal_Sound",
+                "Terra_Ceia_Bay",
+                "Waccasassa_Bay",
+                "Apalachicola_Bay",
+                "Mobile_Bay",
+                "Galveston_Bay",
+                "Matagorda_Bay",
+                "San_Antonio_Bay",
+                "Corpus_Christi_Bay")
+
+site_order_fig <- c("Bulls Bay", 
+                "St. Helena Sound",
+                "Port Royal Sound",
+                "Terra Ceia Bay",
+                "Waccasassa Bay",
+                "Apalachicola Bay",
+                "Mobile Bay",
+                "Galveston Bay",
+                "Matagorda Bay",
+                "San Antonio Bay",
+                "Corpus Christi Bay")
+
+site_order_fig_rev <- c("Corpus Christi Bay",
+                        "San Antonio Bay",
+                        "Matagorda Bay",
+                        "Galveston Bay",
+                        "Mobile Bay",
+                        "Apalachicola Bay",
+                        "Waccasassa Bay",
+                        "Terra Ceia Bay",
+                        "Port Royal Sound",
+                        "St. Helena Sound",
+                        "Bulls Bay")
+
+site_order_fig_map <- c("Galveston Bay",
+                        "Matagorda Bay",
+                        "San Antonio Bay",
+                        "Corpus Christi Bay",
+                        "Mobile Bay",
+                        "Apalachicola Bay",
+                        "Waccasassa Bay",
+                        "Terra Ceia Bay",
+                        "Bulls Bay",
+                        "St. Helena Sound",
+                        "Port Royal Sound")
+
+site_order_shrt_rev <- c("CCB", "SAB", "MAB", "GAB", "MOB", "APB", "WAB", "TCB", "PRS", "SHS", "BLB")
+
+region_order <- c("Atl", "EGoM", "WGoM")
+
+region_order_fig <- c("Atlantic", "Eastern Gulf", "Western Gulf")
+
+region_order_fig_rev <- c("Western Gulf", "Eastern Gulf", "Atlantic")
+
+site_col <- c("#7f0000", "#b30000", "#d7301f", "#4d004b", "#810f7c", "#88419d", "#8c96c6", "#9ecae1", "#4292c6", "#08519c", "#08306b")
+
+site_col_rev <- c("#08306b", "#08519c", "#4292c6", "#9ecae1", "#8c96c6", "#88419d", "#810f7c", "#4d004b", "#d7301f", "#b30000", "#7f0000")
+
+site_col_map <- c("#9ecae1", "#4292c6", "#08519c", "#08306b", "#8c96c6", "#88419d", "#810f7c", "#4d004b", "#d7301f", "#b30000", "#7f0000")
+              
+shape11 <- c(21, 21, 21, 23, 23, 23, 23, 24, 24, 24, 24)
+
+shape11_rev <- c(24, 24, 24, 24, 23, 23, 23, 23, 21, 21, 21)
+
+shape3 <- c(21, 23, 24)
+
+shape3_rev <- c(24, 23, 21)
+
+region_col <- c('#b30000','#810f7c','#08519c')
+
+lib_col <- c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF33")
+
+options(scipen=10000)
+
+```
+
+# Arlequin
+
+Execute AMOVA and post-hoc pairwise FST tests among regions and sites.
+
+Rename `pop` in `.arp` files with site name. Prep `.arp`files for locus-by-locus pairwise FST tests and insert structure formats. 
+
+```{bash, eval = FALSE}
+
+cd /home/dswift/Projects/us_blacktips/pop_str/data
+
+# rename sites
+
+ls yoy_*.arp | while read i; do sed -i 's/"pop_1"/"BLB"/g' $i $i; sed -i 's/"pop_2"/"SHS"/g' $i $i; sed -i 's/"pop_3"/"PRS"/g' $i $i; sed -i 's/"pop_4"/"TCB"/g' $i $i; sed -i 's/"pop_5"/"WAB"/g' $i $i; sed -i 's/"pop_6"/"APB"/g' $i $i; sed -i 's/"pop_7"/"MOB"/g' $i $i; sed -i 's/"pop_8"/"GAB"/g' $i $i; sed -i 's/"pop_9"/"MAB"/g' $i $i; sed -i 's/"pop_10"/"SAB"/g' $i $i; sed -i 's/"pop_11"/"CCB"/g' $i $i; done
+
+# amova and pwfst
+
+cd /home/dswift/Projects/us_blacktips/pop_str/data/amova
+
+## produce .arp files with different structures
+
+rm arl_run.txt randseed.txt
+
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_neu.arp $i.txt > $i"_neu".arp ; done
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_ada.arp $i.txt > $i"_ada".arp ; done
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_wosibs_neu.arp $i.txt > $i"_wosibs_neu".arp ; done
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_wosibs_ada.arp $i.txt > $i"_wosibs_ada".arp ; done
+
+## execute
+
+ls *.arp | while read i; do arlecore3522_64bit $i amova_pwfst.ars ; done
+
+## move output files
+
+mv */*.xml ../../results/amova/.
+
+# lbl pwfst by site
+
+cd /home/dswift/Projects/us_blacktips/pop_str/data/lbl_pwfst
+
+## produce .arp files with different structures
+
+rm arl_run.txt randseed.txt
+
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_neu.arp $i.txt > $i"_neu".arp ; done
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_ada.arp $i.txt > $i"_ada".arp ; done
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_wosibs_neu.arp $i.txt > $i"_wosibs_neu".arp ; done
+ls *.txt | cut -f1 -d"." | while read i; do cat ../yoy_wosibs_ada.arp $i.txt > $i"_wosibs_ada".arp ; done
+
+## execute
+
+ls *.arp | while read i; do arlecore3522_64bit $i lbl_pwfst_no_missing.ars ; done
+
+## move output files
+
+mv */*.xml ../../results/lbl_pwfst/.
+
+cd /home/dswift/Projects/us_blacktips/pop_str/results/lbl_pwfst
+
+grep -A 2 'Average\|Va and FST' *str_neu.xml > lbl_pwfst_neu_results.txt
+
+grep -A 2 'Average\|Va and FST' *str_ada.xml > lbl_pwfst_ada_results.txt
+
+grep -A 2 'Average\|Va and FST' *str_wosibs_neu.xml > lbl_pwfst_wosibs_neu_results.txt
+
+grep -A 2 'Average\|Va and FST' *str_wosibs_ada.xml > lbl_pwfst_wosibs_ada_results.txt
+
+```
+
+## Results
+
+### Pairwise FST and p-values
+
+Round up negative pwFST values and correct p-values for multiple testing using Benjamini-Hochberg.
+
+```{r, warning = FALSE, message = FALSE}
+
+yoy_strata <- read_csv(here("yoy_strata.csv"))
+
+# read in csv files
+
+lbl_pwfst_mtdna <- read_xlsx(here("pop_str", "results", "lbl_pwfst", "lbl_pwfst_results.xlsx"), sheet = "mtdna_wosibs") %>%
+  column_to_rownames("X")
+
+lbl_pwfst_neu <- read_xlsx(here("pop_str", "results", "lbl_pwfst", "lbl_pwfst_results.xlsx"), sheet = "neu_wosibs") %>%
+  column_to_rownames("X")
+
+lbl_pwfst_ada <- read_xlsx(here("pop_str", "results", "lbl_pwfst", "lbl_pwfst_results.xlsx"), sheet = "ada_wosibs") %>%
+  column_to_rownames("X")
+
+# extract pwfst values as vectors
+
+lbl_mtdna_fst <- as.numeric(lowerTriangle(lbl_pwfst_mtdna, diag = TRUE, byrow = FALSE))
+
+lbl_neu_fst <- as.numeric(lowerTriangle(lbl_pwfst_neu, diag = TRUE, byrow = FALSE))
+
+lbl_ada_fst <- as.numeric(lowerTriangle(lbl_pwfst_ada, diag = TRUE, byrow = FALSE))
+
+# produce df of pwfst values, replace negative values with 0, and round to 5 sf
+
+fst_df <- as.data.frame(cbind(lbl_mtdna_fst, lbl_neu_fst, lbl_ada_fst)) %>%
+  mutate_if(is.numeric, funs(ifelse(. < 0, 0, .))) %>%
+  mutate_all(round, 5)
+
+# extract p-values as vectors
+
+lbl_mtdna_pval <- as.numeric(upperTriangle(lbl_pwfst_mtdna, diag = TRUE, byrow = TRUE))
+
+lbl_neu_pval <- as.numeric(upperTriangle(lbl_pwfst_neu, diag = TRUE, byrow = TRUE))
+
+lbl_ada_pval <- as.numeric(upperTriangle(lbl_pwfst_ada, diag = TRUE, byrow = TRUE))
+
+# collect all p values in a df and correct for multiple tests with BH
+
+pval_df <- as.data.frame(cbind(lbl_mtdna_pval, lbl_neu_pval, lbl_ada_pval)) %>%
+  mutate_all(funs(fdr = p.adjust(., method = "BH"))) %>%
+  mutate(across(1:6, round, 5))
+
+```
+
+Produce df of pwFST, corrected, and uncorrected p-values for each dataset.
+
+```{r}
+
+# produce vector of site-site comparisons
+
+comp <- unmatrix(lbl_pwfst_neu, byrow = TRUE) %>%
+  as.data.frame(.) %>%
+  #filter(. != "-") %>%
+  rownames_to_column("comp") %>%
+  select(comp) %>%
+  separate(comp, into = c("site1", "site2"), sep = "[:]", remove = FALSE) %>%
+  #slice(1:8, 10:16, 19:24, 28:32, 37:40, 46:48, 55:56, 64)
+  slice(1:11, 13:22, 25:33, 37:44, 49:55, 61:66, 73:77, 85:88, 97:99, 109:110, 121)
+
+# import shark distance between sites to combine with fst and p values
+
+site_shark_dist <- read_csv(here("rda", "data", "site_shark_dist.csv"))
+
+# lbl mtdna
+
+lbl_mtdna <- as.data.frame(cbind(comp, fst_df$lbl_mtdna_fst, pval_df$lbl_mtdna_pval, pval_df$lbl_mtdna_pval_fdr)) %>%
+  rename(pwFST = "fst_df$lbl_mtdna_fst") %>%
+  rename(pval = "pval_df$lbl_mtdna_pval") %>%
+  rename(cor_pval = "pval_df$lbl_mtdna_pval_fdr") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt)) %>%
+  mutate(site2 = ordered(site2, levels = site_order_shrt_rev)) %>%
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "Atl" & region2 == "EGoM" ~ "Atl-EGoM", 
+                                region1 == "Atl" & region2 == "WGoM" ~ "Atl-WGoM", 
+                                region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM",
+                                region1 == "Atl" & region2 == "Atl" ~ "Atl-Atl", 
+                                region1 == "EGoM" & region2 == "EGoM" ~ "EGoM-EGoM", 
+                                region1 == "WGoM" & region2 =="WGoM" ~ "WGoM-WGoM")) %>%
+  select(-c(region1, region2)) %>%
+  mutate(sign = case_when(cor_pval > 0.05 ~ "",
+                          cor_pval < 0.05 & cor_pval >= 0.01 ~ "*",
+                          cor_pval < 0.01 & cor_pval >= 0.001 ~ "**",
+                          cor_pval <= 0.001 ~ "***")) %>%
+  cbind(site_shark_dist) %>%
+  mutate(dist = site_shark_dist/1000) %>% 
+  select(-site_shark_dist) %>% 
+  drop_na(pwFST, Comparison)
+
+write_csv(lbl_mtdna, here("pop_str", "results", "lbl_pwfst", "lbl_mtdna_df.csv"))
+
+# lbl neu
+
+lbl_neu <- as.data.frame(cbind(comp, fst_df$lbl_neu_fst, pval_df$lbl_neu_pval, pval_df$lbl_neu_pval_fdr)) %>%
+  rename(pwFST = "fst_df$lbl_neu_fst") %>%
+  rename(pval = "pval_df$lbl_neu_pval") %>%
+  rename(cor_pval = "pval_df$lbl_neu_pval_fdr") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt)) %>%
+  mutate(site2 = ordered(site2, levels = site_order_shrt_rev)) %>%
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "Atl" & region2 == "EGoM" ~ "Atl-EGoM", 
+                                region1 == "Atl" & region2 == "WGoM" ~ "Atl-WGoM", 
+                                region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM",
+                                region1 == "Atl" & region2 == "Atl" ~ "Atl-Atl", 
+                                region1 == "EGoM" & region2 == "EGoM" ~ "EGoM-EGoM", 
+                                region1 == "WGoM" & region2 =="WGoM" ~ "WGoM-WGoM")) %>%
+  select(-c(region1, region2)) %>%
+  mutate(sign = case_when(cor_pval > 0.05 ~ "",
+                          cor_pval < 0.05 & cor_pval >= 0.01 ~ "*",
+                          cor_pval < 0.01 & cor_pval >= 0.001 ~ "**",
+                          cor_pval <= 0.001 ~ "***")) %>%
+  cbind(site_shark_dist) %>%
+  mutate(dist = site_shark_dist/1000) %>% 
+  select(-site_shark_dist) %>% 
+  drop_na(pwFST, Comparison)
+
+write_csv(lbl_neu, here("pop_str", "results", "lbl_pwfst", "lbl_neu_df.csv"))
+
+# lbl ada
+
+lbl_ada <- as.data.frame(cbind(comp, fst_df$lbl_ada_fst, pval_df$lbl_ada_pval, pval_df$lbl_ada_pval_fdr)) %>%
+  rename(pwFST = "fst_df$lbl_ada_fst") %>%
+  rename(pval = "pval_df$lbl_ada_pval") %>%
+  rename(cor_pval = "pval_df$lbl_ada_pval_fdr") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt)) %>%
+  mutate(site2 = ordered(site2, levels = site_order_shrt_rev)) %>%
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "Atl" & region2 == "EGoM" ~ "Atl-EGoM", 
+                                region1 == "Atl" & region2 == "WGoM" ~ "Atl-WGoM", 
+                                region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM",
+                                region1 == "Atl" & region2 == "Atl" ~ "Atl-Atl", 
+                                region1 == "EGoM" & region2 == "EGoM" ~ "EGoM-EGoM", 
+                                region1 == "WGoM" & region2 =="WGoM" ~ "WGoM-WGoM")) %>%
+  select(-c(region1, region2)) %>%
+  mutate(sign = case_when(cor_pval > 0.05 ~ "",
+                          cor_pval < 0.05 & cor_pval >= 0.01 ~ "*",
+                          cor_pval < 0.01 & cor_pval >= 0.001 ~ "**",
+                          cor_pval <= 0.001 ~ "***")) %>%
+  cbind(site_shark_dist) %>%
+  mutate(dist = site_shark_dist/1000) %>% 
+  select(-site_shark_dist) 
+
+write_csv(lbl_ada, here("pop_str", "results", "lbl_pwfst", "lbl_ada_df.csv"))
+
+# export site comparisons from pairwise fst tests
+
+site_comp <- select(lbl_ada, comp)
+
+#write.csv(site_comp, "../Results/site_comparison.csv", row.names = FALSE)
+
+```
+
+#### mtDNA ΦST Vs. Geographic Distance
+
+Assess the relationship between pairwise FST and geographic distance between sites between and within regions.
+
+```{r message=FALSE, warning=FALSE}
+
+# linear regression by group
+
+## Atlantic-Eastern Gulf
+
+temp <- lbl_mtdna %>%
+  filter(Comparison == "Atl-EGoM") %>% 
+  drop_na(pwFST)
+
+lm_mtdna_atl_egom <- lm(temp$dist ~ temp$pwFST)
+
+summary(lm_mtdna_atl_egom)
+
+## Atlantic-Western Gulf
+
+temp <- lbl_mtdna %>%
+  filter(Comparison == "Atl-WGoM") %>% 
+  drop_na(pwFST)
+
+lm_mtdna_atl_wgom <- lm(temp$dist ~ temp$pwFST) 
+
+summary(lm_mtdna_atl_wgom)
+
+## Within Gulf
+
+temp <- lbl_mtdna %>%
+  filter(Comparison == "EGoM-WGoM") %>% 
+  drop_na(pwFST)
+
+lm_mtdna_egom_wgom <- lm(temp$dist ~ temp$pwFST)
+
+summary(lm_mtdna_egom_wgom)
+
+```
+
+Plot regional comparisons
+
+```{r fig.height=5, fig.width=15, message=FALSE, warning=FALSE}
+
+# plot
+
+temp <- lbl_mtdna %>% 
+  filter(Comparison == "Atl-EGoM" | Comparison == "Atl-WGoM" | Comparison == "EGoM-WGoM")
+
+dat_text <- data.frame(
+  label = c("ns", "ns", "*"),
+  Comparison = c("Atl-EGoM", "Atl-WGoM", "EGoM-WGoM"),
+  x = c(150, 150, 150),
+  y = c(0.275, 0.275, 0.275))
+
+ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+#  scale_x_continuous(limits = c(0, 2650), breaks = seq(0, 2500, 500), labels= seq(0, 2500, 500)) +
+ # scale_y_continuous(limits = c(-0.0005, 0.3), breaks = seq(0, 0.3, 0.1), labels= seq(0, 0.3, 0.1), ) +
+#  facet_wrap(~ Group, ncol = 3) +
+  facet_grid(. ~ Comparison, scales = "fixed", space = "fixed") +
+  labs(x = "Geographic Distance (km)", y = expression(paste("Pairwise ", Φ[ST]))) +
+  #ggtitle("A") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 26), axis.text=element_text(size=12)) +
+  geom_text(
+  data    = dat_text,
+  size = c(5, 5, 10),
+  color = "red",
+  mapping = aes(x = x, y = y, label = label))
+
+```
+
+Gulf only plots
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# egom-wgom
+
+temp <- lbl_mtdna %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+dat_text <- data.frame(
+  label = "*",
+  x = 1000,
+  y = 0.225)
+
+ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  #scale_x_continuous(limits = c(500, 1500), breaks = seq(500, 1500, 250), labels= seq(500, 1500, 250)) +
+  #scale_y_continuous(limits = c(-0.05, 0.25), breaks = seq(0, 0.25, 0.05), labels= seq(0, 0.25, 0.05)) +
+  labs(x = "Geographic Distance (km)", y = expression(paste("Pairwise ", Φ[ST]))) +
+  #ggtitle("A") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 20), axis.text=element_text(size=12)) +
+  geom_text(
+  data  = dat_text,
+  size = 8,
+  color = "red",
+  mapping = aes(x = x, y = y, label = label))
+
+# within gulf
+
+temp <- lbl_mtdna %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" | region1 == "EGoM" & region2 =="EGoM" | region1 == "WGoM" & region2 =="WGoM" ~ "Within Gulf")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+dat_text <- data.frame(
+  label = "*",
+  x = 1000,
+  y = 0.225)
+
+ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  #scale_x_continuous(limits = c(500, 1500), breaks = seq(500, 1500, 250), labels= seq(500, 1500, 250)) +
+  #scale_y_continuous(limits = c(-0.05, 0.25), breaks = seq(0, 0.25, 0.05), labels= seq(0, 0.25, 0.05)) +
+  labs(x = "Geographic Distance (km)", y = expression(paste("Pairwise ", Φ[ST]))) +
+  #ggtitle("B") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 20), axis.text=element_text(size=12)) +
+  geom_text(
+  data  = dat_text,
+  size = 8,
+  color = "red",
+  mapping = aes(x = x, y = y, label = label))
+
+```
+
+#### Neutral SNPs FST Vs. Geographic Distance
+
+Assess the relationship between pairwise FST and geographic distance between sites between and within regions.
+
+```{r message=FALSE, warning=FALSE}
+
+# linear regression by group
+
+## Atlantic-Eastern Gulf
+
+temp <- lbl_neu %>%
+  filter(Comparison == "Atl-EGoM") %>% 
+  drop_na(pwFST)
+
+lm_neu_atl_egom <- lm(temp$dist ~ temp$pwFST)
+
+summary(lm_neu_atl_egom)
+
+## Atlantic-Western Gulf
+
+temp <- lbl_neu %>%
+  filter(Comparison == "Atl-WGoM") %>% 
+  drop_na(pwFST)
+
+lm_neu_atl_wgom <- lm(temp$dist ~ temp$pwFST) 
+
+summary(lm_neu_atl_wgom)
+
+## Within Gulf
+
+temp <- lbl_neu %>%
+  filter(Comparison == "EGoM-WGoM") %>% 
+  drop_na(pwFST)
+
+lm_neu_egom_wgom <- lm(temp$dist ~ temp$pwFST)
+
+summary(lm_neu_egom_wgom)
+
+```
+
+Plot regional comparisons
+
+```{r fig.height=5, fig.width=15, message=FALSE, warning=FALSE}
+
+# plot
+
+temp <- lbl_neu %>% 
+  filter(Comparison == "Atl-EGoM" | Comparison == "Atl-WGoM" | Comparison == "EGoM-WGoM")
+
+dat_text <- data.frame(
+  label = c("ns", "ns", "**"),
+  Comparison = c("Atl-EGoM", "Atl-WGoM", "EGoM-WGoM"),
+  x = c(400, 400, 400),
+  y = c(0.004, 0.004, 0.004))
+
+ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+ # scale_x_continuous(limits = c(0, 2650), breaks = seq(0, 2500, 500), labels= seq(0, 2500, 500)) +
+  #scale_y_continuous(limits = c(-0.0005, 0.3), breaks = seq(0, 0.3, 0.1), labels= seq(0, 0.3, 0.1), ) +
+#  facet_wrap(~ Group, ncol = 3) +
+  facet_grid(. ~ Comparison, scales = "fixed", space = "fixed") +
+  labs(x = "Geographic Distance (km)", y = expression(paste("Pairwise Neutral ", italic(F)[ST]))) +
+  ggtitle("A") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 26), axis.text=element_text(size=12)) +
+  geom_text(
+  data    = dat_text,
+  size = c(5, 5, 10),
+  color = "red",
+  mapping = aes(x = x, y = y, label = label))
+
+```
+
+Gulf only plots
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# egom-wgom
+
+temp <- lbl_neu %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+dat_text <- data.frame(
+  label = "*",
+  x = 1000,
+  y = 0.001)
+
+ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  scale_x_continuous(limits = c(700, 1500), breaks = seq(750, 1500, 250), labels= seq(750, 1500, 250)) +
+  #scale_y_continuous(limits = c(-0.05, 0.25), breaks = seq(0, 0.25, 0.05), labels= seq(0, 0.25, 0.05)) +
+  labs(x = "Geographic Distance (km)", y = expression(paste("Pairwise Neutral ", italic(F)[ST]))) +
+  ggtitle("D") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 20), axis.text=element_text(size=12)) +
+  geom_text(
+  data  = dat_text,
+  size = 8,
+  color = "red",
+  mapping = aes(x = x, y = y, label = label))
+
+# within gulf
+
+temp <- lbl_neu %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" | region1 == "EGoM" & region2 =="EGoM" | region1 == "WGoM" & region2 =="WGoM" ~ "Within Gulf")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+dat_text <- data.frame(
+  label = "*",
+  x = 1000,
+  y = 0.001)
+
+ggplot(data = temp, aes(x = dist, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  #scale_x_continuous(limits = c(500, 1500), breaks = seq(500, 1500, 250), labels= seq(500, 1500, 250)) +
+  #scale_y_continuous(limits = c(-0.05, 0.25), breaks = seq(0, 0.25, 0.05), labels= seq(0, 0.25, 0.05)) +
+  labs(x = "Geographic Distance (km)", y = expression(paste("Pairwise Neutral ", italic(F)[ST]))) +
+ # ggtitle("B") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 20), axis.text=element_text(size=12)) +
+  geom_text(
+  data  = dat_text,
+  size = 8,
+  color = "red",
+  mapping = aes(x = x, y = y, label = label))
+
+```
+
+#### Adaptive SNPs FST Vs. Latitude
+
+Assess the relationship between pairwise FST and latitude between sites.
+
+```{r message=FALSE, warning=FALSE}
+
+lat_diff <- read_csv(here("rda", "data", "lat_diff.csv"))
+
+fst_ada_df <- lbl_ada %>% 
+  cbind(lat_diff) %>% 
+  drop_na(pwFST, Comparison)
+
+# linear regression by group
+
+## Atlantic-Eastern Gulf
+
+temp <- fst_ada_df %>%
+  filter(Comparison == "Atl-EGoM") %>% 
+  drop_na(pwFST)
+
+lm_ada_atl_egom <- lm(temp$lat_diff ~ temp$pwFST)
+
+summary(lm_ada_atl_egom)
+
+## Atlantic-Western Gulf
+
+temp <- fst_ada_df %>%
+  filter(Comparison == "Atl-WGoM") %>% 
+  drop_na(pwFST)
+
+lm_ada_atl_wgom <- lm(temp$lat_diff ~ temp$pwFST) 
+
+summary(lm_ada_atl_wgom)
+
+## Within Gulf
+
+temp <- fst_ada_df %>%
+  filter(Comparison == "EGoM-WGoM") %>% 
+  drop_na(pwFST)
+
+lm_ada_egom_wgom <- lm(temp$lat_diff ~ temp$pwFST)
+
+summary(lm_ada_egom_wgom)
+
+```
+
+Plot regional comparisons
+
+```{r fig.height=5, fig.width=15, message=FALSE, warning=FALSE}
+
+# plot
+
+temp <- fst_ada_df %>% 
+  filter(Comparison == "Atl-EGoM" | Comparison == "Atl-WGoM" | Comparison == "EGoM-WGoM")
+
+dat_text <- data.frame(
+  label = c("ns", "ns", "**"),
+  Comparison = c("Atl-EGoM", "Atl-WGoM", "EGoM-WGoM"),
+  x = c(400, 400, 400),
+  y = c(0.004, 0.004, 0.004))
+
+ggplot(data = temp, aes(x = lat_diff, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  #scale_x_continuous(limits = c(0, 3), breaks = seq(0, 3, 1), labels= seq(0, 3, 1)) +
+  #scale_y_continuous(limits = c(-0.0005, 0.3), breaks = seq(0, 0.3, 0.1), labels= seq(0, 0.3, 0.1), ) +
+#  facet_wrap(~ Group, ncol = 3) +
+  facet_grid(. ~ Comparison, scales = "fixed", space = "fixed") +
+  labs(x = "Absolute Difference in Degrees Latitude", y = expression(paste("Pairwise Adaptive ", italic(F)[ST]))) +
+  ggtitle("A") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 26), axis.text=element_text(size=12))
+
+```
+
+egom-wgom only plots
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# egom-wgom
+
+temp <- fst_ada_df %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" ~ "EGoM-WGoM")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+dat_text <- data.frame(
+  label = "*",
+  x = 1000,
+  y = 0.001)
+
+ggplot(data = temp, aes(x = lat_diff, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  #scale_x_continuous(limits = c(500, 1500), breaks = seq(500, 1500, 250), labels= seq(500, 1500, 250)) +
+  scale_y_continuous(limits = c(-0.0025, 0.025), breaks = seq(0, 0.025, 0.005), labels= seq(0, 0.025, 0.005)) +
+  labs(x = "Absolute Difference in Degrees Latitude", y = expression(paste("Pairwise Adaptive ", italic(F)[ST]))) +
+  ggtitle("H") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 20), axis.text=element_text(size=12))
+
+```
+
+Gulf only plots
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# within gulf
+
+temp <- fst_ada_df %>% 
+  select(-Comparison) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "WGoM")) %>%
+  mutate(Comparison = case_when(region1 == "EGoM" & region2 =="WGoM" | region1 == "EGoM" & region2 =="EGoM" | region1 == "WGoM" & region2 =="WGoM" ~ "Within Gulf")) %>% 
+  select(-c(region1, region2)) %>%
+  drop_na(pwFST, Comparison)
+
+dat_text <- data.frame(
+  label = "*",
+  x = 1000,
+  y = 0.001)
+
+
+
+ggplot(data = temp, aes(x = lat_diff, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  #scale_x_continuous(limits = c(500, 1500), breaks = seq(500, 1500, 250), labels= seq(500, 1500, 250)) +
+  #scale_y_continuous(limits = c(-0.05, 0.25), breaks = seq(0, 0.25, 0.05), labels= seq(0, 0.25, 0.05)) +
+  labs(x = "Absolute Difference in Degrees Latitude", y = expression(paste("Pairwise Adaptive ", italic(F)[ST]))) +
+  #ggtitle("B") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 20), axis.text=element_text(size=12))
+
+# linear regression by group
+
+## Within Gulf
+
+temp2 <- temp %>%
+  filter(Comparison == "Within Gulf") %>% 
+  drop_na(pwFST)
+
+lm_ada_within_gulf <- lm(temp2$lat_diff ~ temp2$pwFST)
+
+summary(lm_ada_within_gulf)
+
+
+```
+
+#### Adaptive SNPs FST Vs. Longitude
+
+```{r fig.height=3.5, fig.width=9.5, message=FALSE, warning=FALSE}
+
+# import differences in longitude between sites
+
+long_diff <- read_csv(here("rda", "data", "long_diff.csv"))
+
+fst_ada_df <- lbl_ada %>% 
+  cbind(long_diff) %>% 
+  mutate(region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atlantic",
+                             site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "Eastern Gulf",
+                             site1 %in% c("GAB", "MAB", "SAB", "CCB") ~ "Western Gulf")) %>%
+  mutate(region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atlantic",
+                             site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "Eastern Gulf",
+                             site2 %in% c("GAB", "MAB", "SAB", "CCB") ~ "Western Gulf")) %>%
+  mutate(Group = case_when(region1 == "Atlantic" & region2 == "Atlantic"  ~ "Within Atlantic",
+                           region1 == "Eastern Gulf" & region2 == "Eastern Gulf"  ~ "Within Eastern Gulf",
+                           region1 == "Western Gulf" & region2 == "Western Gulf" ~ "Within Western Gulf", 
+                           region1 == "Atlantic" & region2 == "Eastern Gulf" ~ "Atlantic-Eastern Gulf", 
+                           region1 == "Atlantic" & region2 == "Western Gulf" ~ "Atlantic-Western Gulf", 
+                           region1 == "Eastern Gulf" & region2 == "Western Gulf" ~ "Eastern Gulf-Western Gulf")) %>%
+  mutate(Group = ordered(Group, levels = c("Within Atlantic", "Within Eastern Gulf", "Within Western Gulf", "Atlantic-Eastern Gulf", "Atlantic-Western Gulf", "Eastern Gulf-Western Gulf")))
+
+# linear regression by group
+
+## Atlantic-Eastern Gulf
+
+temp <- fst_ada_df %>%
+  filter(Group == "Atlantic-Eastern Gulf") %>% 
+  drop_na(pwFST)
+
+lm_ada_atl_egom <- lm(temp$long_diff ~ temp$pwFST)
+
+summary(lm_ada_atl_egom)
+
+## Atlantic-Western Gulf
+
+temp <- fst_ada_df %>%
+  filter(Group == "Atlantic-Western Gulf") %>% 
+  drop_na(pwFST)
+
+lm_ada_atl_wgom <- lm(temp$long_diff ~ temp$pwFST) 
+
+summary(lm_ada_atl_wgom)
+
+## Eastern Gulf-Western Gulf
+
+temp <- fst_ada_df %>%
+  filter(Group == "Eastern Gulf-Western Gulf") %>% 
+  drop_na(pwFST)
+
+lm_ada_egom_wgom <- lm(temp$long_diff ~ temp$pwFST)
+
+summary(lm_ada_egom_wgom)
+
+## Atlantic-Atlantic
+
+temp <- fst_ada_df %>%
+  filter(Group == "Within Atlantic") %>% 
+  drop_na(pwFST)
+
+lm_ada_atl_atl <- lm(temp$long_diff ~ temp$pwFST)
+
+summary(lm_ada_atl_atl)
+
+## Eastern Gulf-Eastern Gulf
+
+temp <- fst_ada_df %>%
+  filter(Group == "Within Eastern Gulf") %>% 
+  drop_na(pwFST)
+
+lm_ada_egom_egom <- lm(temp$long_diff ~ temp$pwFST)
+
+summary(lm_ada_egom_egom)
+
+## Western Gulf-Western Gulf
+
+temp <- fst_ada_df %>%
+  filter(Group == "Within Western Gulf") %>% 
+  drop_na(pwFST)
+
+lm_ada_wgom_wgom <- lm(temp$long_diff ~ temp$pwFST)
+
+summary(lm_ada_wgom_wgom)
+
+# plot
+
+temp <- fst_ada_df %>% 
+  filter(Group == "Within Atlantic" | Group == "Within Eastern Gulf" | Group == "Within Western Gulf") %>% 
+  mutate(Group = ordered(Group, levels = c("Within Atlantic", "Within Eastern Gulf", "Within Western Gulf")))
+
+dat_text <- data.frame(
+  label = c("ns", "ns", "**"),
+  Group   = c("Within Atlantic", "Within Eastern Gulf", "Within Western Gulf"),
+  x = c(0.3, 0.3, 0.3),
+  y = c(0.0275, 0.0275, 0.0275))
+
+fst_long <- ggplot(data = temp, aes(x = long_diff, y = pwFST), show.legend = F) +
+  geom_point(size = 2, alpha = 0.75) +
+  geom_smooth(method = lm, size = 1, alpha = 0.5) +
+  scale_x_continuous(limits = c(0, 6), breaks = seq(0, 6, 1), labels= seq(0, 6, 1)) +
+  scale_y_continuous(limits = c(0, 0.03), breaks = seq(0, 0.03, 0.01), labels= seq(0, 0.03, 0.01)) +
+  #facet_wrap(~ Group, ncol = 3) +
+  facet_grid(. ~ Group, scales = "fixed", space = "fixed") +
+  labs(x = "Absolute Difference in Degrees of Longitude", y = expression(paste("Adaptive Pairwise ", italic(F)[ST]))) +
+  ggtitle("B") +
+  guides(fill = F, shape = F, color = F) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12), legend.position = "right", legend.box = "vertical", plot.title = element_text(size = 20), axis.text=element_text(size=12)) +
+  geom_text(
+  data = dat_text,
+  size = c(5, 5, 10),
+  color = "red",
+  mapping = aes(x = x, y = y, label = label))
+        
+fst_long
+
+```
+
+### Figure 3
+
+```{r fig.height=12, fig.width=5, message=FALSE, warning=FALSE}
+
+mtdna_gulf / neu_gulf / ada_gulf
+
+ggsave(here("pop_str", "results", "fig3.png"))
+
+ggsave(here("pop_str", "results", "fig3.pdf"))
+
+```
+
+### Figure 4
+
+```{r fig.height=7, fig.width=9.5, message=FALSE, warning=FALSE}
+
+fst_lat / fst_long
+
+ggsave(here("pop_str", "results", "fig4.png"))
+
+ggsave(here("pop_str", "results", "fig4.pdf"))
+
+```

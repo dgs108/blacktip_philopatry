@@ -1,0 +1,1142 @@
+---
+title: "Diversity Metrics: YOY Blacktips in US. Waters"
+author: "DG Swift"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+Assess population structure using `Arlequin`, PCA, and DAPC.
+  
+# Environment
+  
+```{r, message=FALSE}
+
+.libPaths("/usr/lib64/R/library")
+
+# invalidate cache when the package version changes
+
+knitr::opts_chunk$set(
+  root.dir = "~/Projects/us_blacktips/diversity",
+	message = FALSE,
+	warning = FALSE,
+	cache.extra = packageVersion("tint"),
+	tidy = FALSE,
+	echo = FALSE)
+
+options(htmltools.dir.version = FALSE)
+
+# conflicts
+
+library(conflicted)
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("s.label", "adegraphics")
+conflict_prefer("s.value", "adegraphics")
+conflict_prefer("scalebar", "raster")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("extract", "raster")
+conflict_prefer("degree", "igraph")
+
+# packages
+
+.libPaths("/usr/lib64/R/library")
+
+library(tidyverse)
+library(adegenet)
+library(here)
+library(readr)
+library(glue)
+library(knitr)
+library(poppr)
+library(hierfstat)
+library(coin)
+library(zvau)
+library(ggbeeswarm)
+library(vcfR)
+library(gdata)
+library(gaston)
+library(readxl)
+
+# source scripts
+
+source("~/code/ggplot.R")
+source("~/code/genind.R")
+source("~/code/VCFfilterstats.R")
+
+# orders, colors, shapes
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+site_order_shrt_rev <- c("CCB", "SAB", "MAB", "GAB", "MOB", "APB", "WAB", "TCB", "PRS", "SHS", "BLB")
+
+region_order <- c("Atl", "EGoM", "WGoM")
+
+site_col <- c("#7f0000", "#b30000", "#d7301f", "#4d004b", "#810f7c", "#88419d", "#8c96c6", "#9ecae1", "#4292c6", "#08519c", "#08306b")
+
+site_col_rev <- c("#08306b", "#08519c", "#4292c6", "#9ecae1", "#8c96c6", "#88419d", "#810f7c", "#4d004b", "#d7301f", "#b30000", "#7f0000")
+
+options(scipen=10000)
+
+```
+
+# Effective Size
+
+## No Missing Data
+
+Retain only neutral loci with no missing data.
+
+```{r, message=F, warning=F}
+
+yoy_neu.gen <- read.genepop(file = here("yoy_neu.gen"), ncode = 3L, quiet = FALSE)
+
+yoy_neu_missing.gen <- missingno(yoy_neu.gen, type = "loci", cutoff = 0)
+
+inds <- as.data.frame(indNames(yoy_neu_missing.gen)) %>%
+  rename(hiseq_id = `indNames(yoy_neu_missing.gen)`)
+
+yoy_strata <- read_csv(here("yoy_strata.csv"))
+
+yoy_strata <- left_join(inds, yoy_strata)
+
+strata(yoy_neu_missing.gen) <- yoy_strata
+
+# export neutral dataset by site
+
+setPop(yoy_neu_missing.gen) <- ~site_shrt
+
+writeGenPop(yoy_neu_missing.gen, file.name = here("diversity", "data", "yoy_neu_site_nomissing.gen"), comment = "yoy_neu_site_nomissing.gen")
+
+# export neutral dataset by region
+
+setPop(yoy_neu_missing.gen) <- ~region
+
+writeGenPop(yoy_neu_missing.gen, file.name = here("diversity", "data", "yoy_neu_region_nomissing.gen"), comment = "yoy_neu_region_nomissing.gen")
+
+```
+
+### Results
+
+```{r fig.height=5, fig.width=7, message=FALSE, warning=FALSE}
+
+ne_lower <- read_xlsx(here("Supporting_Information_Tables.xlsx"), sheet = "Table S9") %>%
+  rename(Lower = "Lower Ne Estimate") %>% 
+  mutate(Site = ordered(Site, levels = site_order_shrt))
+
+# plot
+
+ggplot(ne_lower) +
+  geom_bar(aes(x=Site, y=Lower, fill = Site), color = "black", stat = "identity") +
+  geom_label(aes(x = Site, y = -400, label = n), size = 4) +
+  scale_x_discrete("Site", breaks = site_order_shrt, labels= site_order_shrt) +
+  scale_y_continuous(expression(paste("Lower ", italic(N)[e], " Estimate")), limits = c(-400, 8000), breaks = seq(0, 8000, 1000), labels = seq(0, 8000, 1000)) +
+  scale_fill_manual(values=site_col, name = "Site") +
+  theme_standard +
+  theme(legend.position = "")
+
+ggsave(here("fig4.pdf"))
+
+ggsave(here("fig4.png"))
+
+```
+
+# Genetic Diversity by Site (Neutral Loci)
+
+```{r}
+
+yoy_neu.gen <- read.genepop(file = here("yoy_neu.gen"), ncode = 3L, quiet = FALSE)
+
+inds <- as.data.frame(indNames(yoy_neu.gen)) %>%
+  rename(hiseq_id = `indNames(yoy_neu.gen)`)
+
+yoy_strata <- read_csv(here("yoy_strata.csv"))
+
+yoy_strata <- left_join(inds, yoy_strata)
+
+strata(yoy_neu.gen) <- yoy_strata
+
+setPop(yoy_neu.gen) <- ~site_shrt
+
+yoy_site <- seppop(yoy_neu.gen)
+
+yoy_grps <- yoy_site
+
+# calculate diversity stats
+
+loci_stats <- list()
+
+for (g in names(yoy_grps)) {
+
+loc1 <- locus_table(yoy_grps[[g]], index = "shannon") %>%
+  as.data.frame() %>%
+  rownames_to_column("locus") %>% 
+  mutate(site = g)
+
+loc2 <- locus_table(yoy_grps[[g]], index = "simpson") %>%
+  as.data.frame() %>%
+  rownames_to_column("locus")
+
+temp <- left_join(loc1, loc2)
+
+loc3 <- locus_table(yoy_grps[[g]], index = "invsimpson") %>%
+  as.data.frame() %>%
+  rownames_to_column("locus")
+
+loci_stats[[g]] <- left_join(temp, loc3)
+
+}
+
+loci_stats_df <- tibble(do.call(rbind, loci_stats)) %>% 
+  rename(simpson = "1-D",
+         n_alleles = allele,
+         shannon = H,
+         stood_taylor = G,
+         evenness = Evenness) %>%
+  filter(locus != "mean") %>% 
+  relocate(site, .after=locus)
+
+#loci_stats[is.na(loci_stats)] <- NA
+
+# export
+
+write_csv(loci_stats_df, here("diversity", "data", "neu_loci_stats.csv"))
+
+```
+
+## Nei's Gene Diversity
+
+Compare patterns of Nei's gene diversity (i.e., expected heterozygosity) across loci by site.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+neu_loci_stats <- read_csv(here("diversity", "data", "neu_loci_stats.csv"))
+
+neu_nei <- neu_loci_stats %>%
+  select(site, locus, Hexp) %>%
+  filter(site %in% site_order_shrt_rev) %>%
+  mutate(site = ordered(site, levels = site_order_shrt_rev))
+
+ggplot(neu_nei, aes(x = site, y = Hexp, fill = site)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_manual(values = site_col_rev) +
+  labs(x = "", y = "Nei's Gene Diversity (Neutral Loci)") +
+  theme_standard +
+  theme(axis.text.x = element_text(angle = 0))
+
+ggsave(here("diversity", "results", "neu_nei.png"))
+
+neu_nei_mean <- neu_nei %>%
+  group_by(site) %>%
+  summarise(mean(Hexp), sd(Hexp))
+
+write_csv(neu_nei_mean, here("diversity", "results", "neu_nei_mean.csv"))
+
+```
+
+Test for significant differences among sites using Friedman's test.
+
+```{r}
+
+# remove loci with NA values
+
+rm <- neu_nei %>%
+  filter(is.na(Hexp))
+
+temp <- neu_nei %>%
+  filter(!locus %in% rm$locus)
+
+friedman.test(Hexp ~ site | locus, data = temp)
+
+```
+
+Test for significant pairwise differences between sites using Wilcoxon signed rank tests that test of symmetry of numeric repeated measurements (i.e., statistics per locus) in a block design.
+
+```{r fig.height=6, fig.width=7, message=FALSE, warning=FALSE}
+
+# import site comparisons from pairwise fst tests
+
+site_comp <- read_csv(here("pop_str", "results", "site_comparison.csv"))
+
+# groups to compare
+
+comp <- as.character(unique(neu_nei$site))
+
+# pairs of comparisons
+
+pairs <- combn(comp, 2, simplify = FALSE)
+
+pairs <- expand.grid(comp, comp) %>%
+  filter(!Var1 == Var2) %>%
+  rownames_to_column("PAIR") %>%
+  split(.$PAIR) %>%
+  purrr::map(function(x){
+    x %>%
+      select(-PAIR) %>%
+      gather(key = temp, value = site, 1:2) %>%
+      select(-temp)
+  })
+
+# empty data frame for results
+
+results <- setNames(data.frame(matrix(ncol = 4, nrow = 0)), 
+                    c("site1", "site2", "stat", "p.value")) %>%
+  mutate(site1 = as.character(site1),
+         site2 = as.character(site2),
+         stat = as.numeric(stat),
+         p.value = as.numeric(p.value))
+
+n <- as.numeric(length(pairs))
+
+# loop over pairs
+
+for(p in 1:length(pairs)){
+
+  pair <- pairs[[p]]$site
+
+  temp <- neu_nei %>%
+    filter(site %in% pair) %>%
+    mutate(site = ordered(site, levels = pair),
+         locus = as.factor(locus)) %>%
+  droplevels()
+
+  wilcox <- wilcoxsign_test(Hexp ~ site | locus,
+                data = temp,
+                zero.method = "Pratt")
+
+  df <- data.frame("site1" = pair[1],
+                   "site2" = pair[2],
+                   "stat" = as.numeric(wilcox@statistic@teststatistic),
+                   "p-value" = as.numeric(pvalue(wilcox)))
+
+  results <- bind_rows(results, df)
+
+}
+
+nei_neu_results <- results %>%
+  mutate(p_adj = p.adjust(p.value, "BH"),
+         region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site1 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site2 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         p.value = round(p.value, digits = 5), 
+         p_adj = round(p_adj, digits = 5)) %>%
+  unite(comp, site1, site2, sep = ":", remove = FALSE) %>%
+  unite(region_comp, region1, region2, sep = ":") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt),
+         site2 = ordered(site2, levels = site_order_shrt)) %>%
+  mutate(sign = case_when(p_adj > 0.05 ~ ">0.05",
+                          p_adj < 0.05 & p_adj > 0.01 ~ "<0.05",
+                          p_adj < 0.01 & p_adj > 0.001 ~ "<0.01",
+                          p_adj <= 0.001 ~ "<0.001"))
+
+write_csv(nei_neu_results, here("diversity", "results", "nei_neu_results.csv"))
+
+```
+
+## Rarefied Allele Richness
+
+```{r}
+
+# by site
+
+setPop(yoy_neu.gen) <- ~site_shrt
+
+gen_est <- seppop(yoy_neu.gen)
+
+temp <- gen_est[c(site_order_shrt)]
+
+temp <- repool(temp)
+
+setPop(temp) <- ~site_shrt
+
+dat <- genind2hierfstat(temp)
+
+df <- allelic.richness(dat, diploid = TRUE)
+
+ar <- as.data.frame(df$Ar) %>%
+  rownames_to_column("locus")
+
+write_csv(ar, here("diversity", "results", "neu_ar_locus.csv"))
+
+```
+
+Calculate allelic richness corrected for sample size using rarefaction.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+neu_ar <- read_csv(here("diversity", "results", "neu_ar_locus.csv")) %>%
+  gather(key = site, value = AR, 2:12) %>%
+  filter(site %in% site_order_shrt) %>%
+  mutate(site = ordered(site, levels = site_order_shrt_rev)) %>%
+  mutate(region = case_when(site %in% c("Atl", "BLB", "SHS", "PRS") ~ "Atl",
+                           site %in% c("EGoM", "TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site %in% c("WGoM", "GAB", "MAB", "SAB", "CCB") ~ "WGoM"))
+
+ggplot(neu_ar, aes(x = site, y = AR, fill = site)) +
+  geom_boxplot(show.legend = FALSE) +
+  scale_fill_manual(values = site_col_rev) +
+  coord_flip() +
+  labs(x = "", y = "Rarefied Allele Count (Neutral Loci)") +
+  theme_standard
+
+ggsave(here("diversity", "results", "neu_ar.png"))
+
+neu_ar_mean <- neu_ar %>%
+  group_by(site) %>%
+  summarise(mean(AR), sd(AR)) %>% 
+  rename(mean_AR = "mean(AR)", sd_AR = "sd(AR)")
+
+write_csv(neu_ar_mean, here("diversity", "results", "neu_ar_mean.csv"))
+
+```
+
+Test for significant differences among sites using Friedman's test.
+
+```{r}
+
+friedman.test(AR ~ site | locus, data = neu_ar)
+
+```
+
+Test for significant pairwise differences between sites using Wilcoxon signed rank tests that test of symmetry of numeric repeated measurements (i.e., statistics per locus) in a block design.
+
+```{r fig.height=6, fig.width=7, message=FALSE, warning=FALSE}
+
+# groups to compare
+
+comp <- as.character(unique(neu_ar$site))
+
+# pairs of comparisons
+
+pairs <- combn(comp, 2, simplify = FALSE)
+
+pairs <- expand.grid(comp, comp) %>%
+  filter(!Var1 == Var2) %>%
+  rownames_to_column("PAIR") %>%
+  split(.$PAIR) %>%
+  purrr::map(function(x){
+    x %>%
+      select(-PAIR) %>%
+      gather(key = delete, value = site, 1:2) %>%
+      select(-delete)
+  })
+
+# empty data frame for results
+
+results <- setNames(data.frame(matrix(ncol = 4, nrow = 0)), 
+                    c("site1", "site2", "stat", "p.value")) %>%
+  mutate(site1 = as.character(site1),
+         site2 = as.character(site2),
+         stat = as.numeric(stat),
+         p.value = as.numeric(p.value))
+
+n <- as.numeric(length(pairs))
+
+# loop over pairs
+
+for(i in 1:length(pairs)){
+  
+  p <- i
+
+  pair <- pairs[[p]]$site
+
+  temp <- neu_ar %>%
+    filter(site %in% pair) %>%
+    mutate(site = ordered(site, levels = pair),
+         locus = as.factor(locus)) %>%
+  droplevels()
+
+  wilcox <- wilcoxsign_test(AR ~ site | locus,
+                data = temp,
+                zero.method = "Pratt")
+
+  df <- data.frame("site1" = pair[1],
+                   "site2" = pair[2],
+                   "stat" = as.numeric(wilcox@statistic@teststatistic),
+                   "p-value" = as.numeric(pvalue(wilcox)))
+
+  results <- bind_rows(results, df)
+
+}
+
+ar_neu_results <- results %>%
+  mutate(p_adj = p.adjust(p.value, "BH"),
+         region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site1 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site2 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         p.value = round(p.value, digits = 5), 
+         p_adj = round(p_adj, digits = 5)) %>%
+  unite(comp, site1, site2, sep = ":", remove = FALSE) %>%
+  unite(region_comp, region1, region2, sep = ":") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt),
+         site2 = ordered(site2, levels = site_order_shrt)) %>%
+  mutate(sign = case_when(p_adj > 0.05 ~ ">0.05",
+                          p_adj < 0.05 & p_adj > 0.01 ~ "<0.05",
+                          p_adj < 0.01 & p_adj > 0.001 ~ "<0.01",
+                          p_adj <= 0.001 ~ "<0.001"))
+
+write_csv(ar_neu_results, here("diversity", "results", "ar_neu_results.csv"))
+
+```
+
+## Evenness
+
+Determine the ratio of the number of abundant genotypes to the number of rarer genotypes calculated using the ratio of Stoddart & Taylor index (diversity index weighted for more abundant alleles) and Shannon-Wiener index (diversity index weighted for more rare alleles).
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+neu_even <- neu_loci_stats %>%
+  select(site, locus, evenness) %>%
+  filter(site %in% site_order_shrt) %>%
+  mutate(site = ordered(site, levels = site_order_shrt_rev))
+
+ggplot(neu_even, aes(x = site, y = evenness, fill = site)) +
+  geom_boxplot(show.legend = FALSE) +
+  scale_fill_manual(values = site_col_rev) +
+  labs(x = "", y = "Evenness (Neutral Loci)") +
+  coord_flip() +
+  theme_standard
+
+ggsave(here("diversity", "results", "neu_evenness.png"))
+
+neu_even_mean <- neu_even %>%
+  group_by(site) %>%
+  summarise(mean(evenness, na.rm = TRUE)) %>% 
+  rename(mean_evenness = "mean(evenness, na.rm = TRUE)")
+
+write_csv(neu_even_mean, here("diversity", "results", "neu_even_mean.csv"))
+
+```
+
+Test for significant differences among sites using Friedman's test.
+
+```{r}
+
+# remove loci with NA values
+
+rm <- neu_even %>%
+  filter(is.na(evenness))
+
+temp <- neu_even %>%
+  filter(!locus %in% rm$locus)
+
+friedman.test(evenness ~ site | locus, data = temp)
+
+```
+
+Test for significant pairwise differences between sites using Wilcoxon signed rank tests that test of symmetry of numeric repeated measurements (i.e., statistics per locus) in a block design.
+
+```{r fig.height=6, fig.width=7, message=FALSE, warning=FALSE}
+
+# remove loci with NA values
+
+rm <- neu_even %>%
+  filter(is.na(evenness))
+
+neu_even <- neu_even %>%
+  filter(!locus %in% rm$locus)
+
+# groups to compare
+
+comp <- as.character(unique(neu_even$site))
+
+# pairs of comparisons
+
+pairs <- combn(comp, 2, simplify = FALSE)
+
+pairs <- expand.grid(comp, comp) %>%
+  filter(!Var1 == Var2) %>%
+  rownames_to_column("PAIR") %>%
+  split(.$PAIR) %>%
+  purrr::map(function(x){
+    x %>%
+      select(-PAIR) %>%
+      gather(key = delete, value = site, 1:2) %>%
+      select(-delete)
+  })
+
+# empty data frame for results
+
+results <- setNames(data.frame(matrix(ncol = 4, nrow = 0)), 
+                    c("site1", "site2", "stat", "p.value")) %>%
+  mutate(site1 = as.character(site1),
+         site2 = as.character(site2),
+         stat = as.numeric(stat),
+         p.value = as.numeric(p.value))
+
+
+n <- as.numeric(length(pairs))
+
+# loop over pairs
+
+for(i in 1:length(pairs)){
+  
+  p <- i
+
+  pair <- pairs[[p]]$site
+
+  temp <- neu_even %>%
+    filter(site %in% pair) %>%
+    mutate(site = ordered(site, levels = pair),
+         locus = as.factor(locus)) %>%
+  droplevels()
+
+  wilcox <- wilcoxsign_test(evenness ~ site | locus,
+                data = temp,
+                zero.method = "Pratt")
+
+  df <- data.frame("site1" = pair[1],
+                   "site2" = pair[2],
+                   "stat" = as.numeric(wilcox@statistic@teststatistic),
+                   "p-value" = as.numeric(pvalue(wilcox)))
+
+  results <- bind_rows(results, df)
+
+}
+
+neu_even_results <- results %>%
+  mutate(p_adj = p.adjust(p.value, "BH"),
+         region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site1 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site2 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         p.value = round(p.value, digits = 5), 
+         p_adj = round(p_adj, digits = 5)) %>%
+  unite(comp, site1, site2, sep = ":", remove = FALSE) %>%
+  unite(region_comp, region1, region2, sep = ":") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt),
+         site2 = ordered(site2, levels = site_order_shrt)) %>%
+  mutate(sign = case_when(p_adj > 0.05 ~ ">0.05",
+                          p_adj < 0.05 & p_adj > 0.01 ~ "<0.05",
+                          p_adj < 0.01 & p_adj > 0.001 ~ "<0.01",
+                          p_adj <= 0.001 ~ "<0.001")) 
+
+write_csv(neu_even_results, here("diversity", "results", "neu_even_results.csv"))
+
+```
+
+## Fixed Alleles
+
+Identify number of fixed alleles within regions and sites.
+
+```{r}
+
+fix_allele <- read_csv(here("diversity", "results", "neu_ar_locus.csv")) %>%
+  gather(key = site, value = AR, 2:12) %>%
+  filter(AR == 1)
+
+```
+
+# Genetic Diversity by Site (Adaptive Loci)
+
+```{r}
+
+yoy_ada.gen <- read.genepop(file = here("yoy_ada.gen"), ncode = 3L, quiet = FALSE)
+
+inds <- as.data.frame(indNames(yoy_ada.gen)) %>%
+  rename(hiseq_id = `indNames(yoy_ada.gen)`)
+
+yoy_strata <- read_csv(here("yoy_strata.csv"))
+
+yoy_strata <- left_join(inds, yoy_strata)
+
+strata(yoy_ada.gen) <- yoy_strata
+
+setPop(yoy_ada.gen) <- ~site_shrt
+
+yoy_site <- seppop(yoy_ada.gen)
+
+yoy_grps <- yoy_site
+
+# calculate diversity stats
+
+loci_stats <- list()
+
+for (g in names(yoy_grps)) {
+
+loc1 <- locus_table(yoy_grps[[g]], index = "shannon") %>%
+  as.data.frame() %>%
+  rownames_to_column("locus") %>% 
+  mutate(site = g)
+
+loc2 <- locus_table(yoy_grps[[g]], index = "simpson") %>%
+  as.data.frame() %>%
+  rownames_to_column("locus")
+
+temp <- left_join(loc1, loc2)
+
+loc3 <- locus_table(yoy_grps[[g]], index = "invsimpson") %>%
+  as.data.frame() %>%
+  rownames_to_column("locus")
+
+loci_stats[[g]] <- left_join(temp, loc3)
+
+}
+
+loci_stats_df <- tibble(do.call(rbind, loci_stats)) %>% 
+  rename(simpson = "1-D",
+         n_alleles = allele,
+         shannon = H,
+         stood_taylor = G,
+         evenness = Evenness) %>%
+  filter(locus != "mean") %>% 
+  relocate(site, .after=locus)
+
+#loci_stats[is.na(loci_stats)] <- NA
+
+# export
+
+write_csv(loci_stats_df, here("diversity", "data", "ada_loci_stats.csv"))
+
+```
+
+## Nei's Gene Diversity
+
+Compare patterns of Nei's gene diversity (i.e., expected heterozygosity) across loci by site.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ada_loci_stats <- read_csv(here("diversity", "data", "ada_loci_stats.csv"))
+
+ada_nei <- ada_loci_stats %>%
+  select(site, locus, Hexp) %>%
+  filter(site %in% site_order_shrt_rev) %>%
+  mutate(site = ordered(site, levels = site_order_shrt_rev))
+
+ggplot(ada_nei, aes(x = site, y = Hexp, fill = site)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_manual(values = site_col_rev) +
+  labs(x = "", y = "Nei's Gene Diversity (Adaptive Loci)") +
+  theme_standard +
+  theme(axis.text.x = element_text(angle = 0))
+
+ggsave(here("diversity", "results", "ada_nei.png"))
+
+ada_nei_mean <- ada_nei %>%
+  group_by(site) %>%
+  summarise(mean(Hexp), sd(Hexp))
+
+write_csv(ada_nei_mean, here("diversity", "results", "ada_nei_mean.csv"))
+
+```
+
+Test for significant differences among sites using Friedman's test.
+
+```{r}
+
+# remove loci with NA values
+
+rm <- ada_nei %>%
+  filter(is.na(Hexp))
+
+temp <- ada_nei %>%
+  filter(!locus %in% rm$locus)
+
+friedman.test(Hexp ~ site | locus, data = temp)
+
+```
+
+Test for significant pairwise differences between sites using Wilcoxon signed rank tests that test of symmetry of numeric repeated measurements (i.e., statistics per locus) in a block design.
+
+```{r fig.height=6, fig.width=7, message=FALSE, warning=FALSE}
+
+# import site comparisons from pairwise fst tests
+
+site_comp <- read_csv(here("pop_str", "results", "site_comparison.csv"))
+
+# groups to compare
+
+comp <- as.character(unique(ada_nei$site))
+
+# pairs of comparisons
+
+pairs <- combn(comp, 2, simplify = FALSE)
+
+pairs <- expand.grid(comp, comp) %>%
+  filter(!Var1 == Var2) %>%
+  rownames_to_column("PAIR") %>%
+  split(.$PAIR) %>%
+  purrr::map(function(x){
+    x %>%
+      select(-PAIR) %>%
+      gather(key = temp, value = site, 1:2) %>%
+      select(-temp)
+  })
+
+# empty data frame for results
+
+results <- setNames(data.frame(matrix(ncol = 4, nrow = 0)), 
+                    c("site1", "site2", "stat", "p.value")) %>%
+  mutate(site1 = as.character(site1),
+         site2 = as.character(site2),
+         stat = as.numeric(stat),
+         p.value = as.numeric(p.value))
+
+n <- as.numeric(length(pairs))
+
+# loop over pairs
+
+for(p in 1:length(pairs)){
+
+  pair <- pairs[[p]]$site
+
+  temp <- ada_nei %>%
+    filter(site %in% pair) %>%
+    mutate(site = ordered(site, levels = pair),
+         locus = as.factor(locus)) %>%
+  droplevels()
+
+  wilcox <- wilcoxsign_test(Hexp ~ site | locus,
+                data = temp,
+                zero.method = "Pratt")
+
+  df <- data.frame("site1" = pair[1],
+                   "site2" = pair[2],
+                   "stat" = as.numeric(wilcox@statistic@teststatistic),
+                   "p-value" = as.numeric(pvalue(wilcox)))
+
+  results <- bind_rows(results, df)
+
+}
+
+nei_ada_results <- results %>%
+  mutate(p_adj = p.adjust(p.value, "BH"),
+         region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site1 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site2 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         p.value = round(p.value, digits = 5), 
+         p_adj = round(p_adj, digits = 5)) %>%
+  unite(comp, site1, site2, sep = ":", remove = FALSE) %>%
+  unite(region_comp, region1, region2, sep = ":") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt),
+         site2 = ordered(site2, levels = site_order_shrt)) %>%
+  mutate(sign = case_when(p_adj > 0.05 ~ ">0.05",
+                          p_adj < 0.05 & p_adj > 0.01 ~ "<0.05",
+                          p_adj < 0.01 & p_adj > 0.001 ~ "<0.01",
+                          p_adj <= 0.001 ~ "<0.001"))
+
+write_csv(nei_ada_results, here("diversity", "results", "nei_ada_results.csv"))
+
+```
+
+## Rarefied Allele Richness
+
+```{r}
+
+# by site
+
+setPop(yoy_ada.gen) <- ~site_shrt
+
+gen_est <- seppop(yoy_ada.gen)
+
+temp <- gen_est[c(site_order_shrt)]
+
+temp <- repool(temp)
+
+setPop(temp) <- ~site_shrt
+
+dat <- genind2hierfstat(temp)
+
+df <- allelic.richness(dat, diploid = TRUE)
+
+ar <- as.data.frame(df$Ar) %>%
+  rownames_to_column("locus")
+
+write_csv(ar, here("diversity", "results", "ada_ar_locus.csv"))
+
+```
+
+Calculate allelic richness corrected for sample size using rarefaction.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ada_ar <- read_csv(here("diversity", "results", "ada_ar_locus.csv")) %>%
+  gather(key = site, value = AR, 2:12) %>%
+  filter(site %in% site_order_shrt) %>%
+  mutate(site = ordered(site, levels = site_order_shrt_rev)) %>%
+  mutate(region = case_when(site %in% c("Atl", "BLB", "SHS", "PRS") ~ "Atl",
+                           site %in% c("EGoM", "TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site %in% c("WGoM", "GAB", "MAB", "SAB", "CCB") ~ "WGoM"))
+
+ggplot(ada_ar, aes(x = site, y = AR, fill = site)) +
+  geom_boxplot(show.legend = FALSE) +
+  scale_fill_manual(values = site_col_rev) +
+  coord_flip() +
+  labs(x = "", y = "Rarefied Allele Count (Adaptive Loci)") +
+  theme_standard
+
+ggsave(here("diversity", "results", "ada_ar.png"))
+
+ada_ar_mean <- ada_ar %>%
+  group_by(site) %>%
+  summarise(mean(AR), sd(AR)) %>% 
+  rename(mean_AR = "mean(AR)", sd_AR = "sd(AR)")
+
+write_csv(ada_ar_mean, here("diversity", "results", "ada_ar_mean.csv"))
+
+```
+
+Test for significant differences among sites using Friedman's test.
+
+```{r}
+
+friedman.test(AR ~ site | locus, data = ada_ar)
+
+```
+
+Test for significant pairwise differences between sites using Wilcoxon signed rank tests that test of symmetry of numeric repeated measurements (i.e., statistics per locus) in a block design.
+
+```{r fig.height=6, fig.width=7, message=FALSE, warning=FALSE}
+
+# groups to compare
+
+comp <- as.character(unique(ada_ar$site))
+
+# pairs of comparisons
+
+pairs <- combn(comp, 2, simplify = FALSE)
+
+pairs <- expand.grid(comp, comp) %>%
+  filter(!Var1 == Var2) %>%
+  rownames_to_column("PAIR") %>%
+  split(.$PAIR) %>%
+  purrr::map(function(x){
+    x %>%
+      select(-PAIR) %>%
+      gather(key = delete, value = site, 1:2) %>%
+      select(-delete)
+  })
+
+# empty data frame for results
+
+results <- setNames(data.frame(matrix(ncol = 4, nrow = 0)), 
+                    c("site1", "site2", "stat", "p.value")) %>%
+  mutate(site1 = as.character(site1),
+         site2 = as.character(site2),
+         stat = as.numeric(stat),
+         p.value = as.numeric(p.value))
+
+n <- as.numeric(length(pairs))
+
+# loop over pairs
+
+for(i in 1:length(pairs)){
+  
+  p <- i
+
+  pair <- pairs[[p]]$site
+
+  temp <- ada_ar %>%
+    filter(site %in% pair) %>%
+    mutate(site = ordered(site, levels = pair),
+         locus = as.factor(locus)) %>%
+  droplevels()
+
+  wilcox <- wilcoxsign_test(AR ~ site | locus,
+                data = temp,
+                zero.method = "Pratt")
+
+  df <- data.frame("site1" = pair[1],
+                   "site2" = pair[2],
+                   "stat" = as.numeric(wilcox@statistic@teststatistic),
+                   "p-value" = as.numeric(pvalue(wilcox)))
+
+  results <- bind_rows(results, df)
+
+}
+
+ar_ada_results <- results %>%
+  mutate(p_adj = p.adjust(p.value, "BH"),
+         region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site1 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site2 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         p.value = round(p.value, digits = 5), 
+         p_adj = round(p_adj, digits = 5)) %>%
+  unite(comp, site1, site2, sep = ":", remove = FALSE) %>%
+  unite(region_comp, region1, region2, sep = ":") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt),
+         site2 = ordered(site2, levels = site_order_shrt)) %>%
+  mutate(sign = case_when(p_adj > 0.05 ~ ">0.05",
+                          p_adj < 0.05 & p_adj > 0.01 ~ "<0.05",
+                          p_adj < 0.01 & p_adj > 0.001 ~ "<0.01",
+                          p_adj <= 0.001 ~ "<0.001"))
+
+write_csv(ar_ada_results, here("diversity", "results", "ar_ada_results.csv"))
+
+```
+
+## Evenness
+
+Determine the ratio of the number of abundant genotypes to the number of rarer genotypes calculated using the ratio of Stoddart & Taylor index (diversity index weighted for more abundant alleles) and Shannon-Wiener index (diversity index weighted for more rare alleles).
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ada_even <- ada_loci_stats %>%
+  select(site, locus, evenness) %>%
+  filter(site %in% site_order_shrt) %>%
+  mutate(site = ordered(site, levels = site_order_shrt_rev))
+
+ggplot(ada_even, aes(x = site, y = evenness, fill = site)) +
+  geom_boxplot(show.legend = FALSE) +
+  scale_fill_manual(values = site_col_rev) +
+  labs(x = "", y = "Evenness (Adaptive Loci)") +
+  coord_flip() +
+  theme_standard
+
+ggsave(here("diversity", "results", "ada_evenness.png"))
+
+ada_even_mean <- ada_even %>%
+  group_by(site) %>%
+  summarise(mean(evenness, na.rm = TRUE)) %>% 
+  rename(mean_evenness = "mean(evenness, na.rm = TRUE)")
+
+write_csv(ada_even_mean, here("diversity", "results", "ada_even_mean.csv"))
+
+```
+
+Test for significant differences among sites using Friedman's test.
+
+```{r}
+
+# remove loci with NA values
+
+rm <- ada_even %>%
+  filter(is.na(evenness))
+
+temp <- ada_even %>%
+  filter(!locus %in% rm$locus)
+
+friedman.test(evenness ~ site | locus, data = temp)
+
+```
+
+Test for significant pairwise differences between sites using Wilcoxon signed rank tests that test of symmetry of numeric repeated measurements (i.e., statistics per locus) in a block design.
+
+```{r fig.height=6, fig.width=7, message=FALSE, warning=FALSE}
+
+# remove loci with NA values
+
+rm <- ada_even %>%
+  filter(is.na(evenness))
+
+ada_even <- ada_even %>%
+  filter(!locus %in% rm$locus)
+
+# groups to compare
+
+comp <- as.character(unique(ada_even$site))
+
+# pairs of comparisons
+
+pairs <- combn(comp, 2, simplify = FALSE)
+
+pairs <- expand.grid(comp, comp) %>%
+  filter(!Var1 == Var2) %>%
+  rownames_to_column("PAIR") %>%
+  split(.$PAIR) %>%
+  purrr::map(function(x){
+    x %>%
+      select(-PAIR) %>%
+      gather(key = delete, value = site, 1:2) %>%
+      select(-delete)
+  })
+
+# empty data frame for results
+
+results <- setNames(data.frame(matrix(ncol = 4, nrow = 0)), 
+                    c("site1", "site2", "stat", "p.value")) %>%
+  mutate(site1 = as.character(site1),
+         site2 = as.character(site2),
+         stat = as.numeric(stat),
+         p.value = as.numeric(p.value))
+
+
+n <- as.numeric(length(pairs))
+
+# loop over pairs
+
+for(i in 1:length(pairs)){
+  
+  p <- i
+
+  pair <- pairs[[p]]$site
+
+  temp <- ada_even %>%
+    filter(site %in% pair) %>%
+    mutate(site = ordered(site, levels = pair),
+         locus = as.factor(locus)) %>%
+  droplevels()
+
+  wilcox <- wilcoxsign_test(evenness ~ site | locus,
+                data = temp,
+                zero.method = "Pratt")
+
+  df <- data.frame("site1" = pair[1],
+                   "site2" = pair[2],
+                   "stat" = as.numeric(wilcox@statistic@teststatistic),
+                   "p-value" = as.numeric(pvalue(wilcox)))
+
+  results <- bind_rows(results, df)
+
+}
+
+ada_even_results <- results %>%
+  mutate(p_adj = p.adjust(p.value, "BH"),
+         region1 = case_when(site1 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site1 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site1 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         region2 = case_when(site2 %in% c("BLB", "SHS", "PRS") ~ "Atl",
+                           site2 %in% c("TCB", "WAB", "APB", "MOB") ~ "EGoM",
+                           site2 %in% c( "GAB", "MAB", "SAB", "CCB") ~ "WGoM"), 
+         p.value = round(p.value, digits = 5), 
+         p_adj = round(p_adj, digits = 5)) %>%
+  unite(comp, site1, site2, sep = ":", remove = FALSE) %>%
+  unite(region_comp, region1, region2, sep = ":") %>%
+  mutate(site1 = ordered(site1, levels = site_order_shrt),
+         site2 = ordered(site2, levels = site_order_shrt)) %>%
+  mutate(sign = case_when(p_adj > 0.05 ~ ">0.05",
+                          p_adj < 0.05 & p_adj > 0.01 ~ "<0.05",
+                          p_adj < 0.01 & p_adj > 0.001 ~ "<0.01",
+                          p_adj <= 0.001 ~ "<0.001")) 
+
+write_csv(ada_even_results, here("diversity", "results", "ada_even_results.csv"))
+
+```
+
+## Fixed Alleles
+
+Identify number of fixed alleles within regions and sites.
+
+```{r}
+
+fix_allele <- read_csv(here("diversity", "results", "ada_ar_locus.csv")) %>%
+  gather(key = site, value = AR, 2:12) %>%
+  filter(AR == 1)
+
+```
+
+

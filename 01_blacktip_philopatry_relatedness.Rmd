@@ -1,0 +1,1044 @@
+---
+title: "Relatedness: YOY Blacktips in US. Waters"
+author: "DG Swift"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+  
+# Environment
+  
+```{r, message=FALSE}
+
+# set working directory
+
+.libPaths("/usr/lib64/R/library")
+
+# invalidate cache when the package version changes
+
+knitr::opts_chunk$set(
+  root.dir = "~/Projects/us_blacktips/related",
+	message = FALSE,
+	warning = FALSE,
+	cache.extra = packageVersion("tint"),
+	tidy = FALSE,
+	echo = FALSE)
+
+options(htmltools.dir.version = FALSE)
+
+# conflicts
+
+library(conflicted)
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("s.label", "adegraphics")
+conflict_prefer("s.value", "adegraphics")
+conflict_prefer("scalebar", "raster")
+conflict_prefer("rename", "dplyr")
+
+# packages
+
+library(tidyverse)
+library(broom)
+library(adegenet)
+library(hierfstat)
+library(pegas)
+library(Demerelate)
+library(ggthemes)
+library(related)
+library(poppr)
+library(glue)
+library(janitor)
+library(here)
+library(readxl)
+library(zvau)
+library(patchwork)
+
+# source functions
+
+source("~/code/genind.R")
+source("~/code/PCA.R")
+source("~/code/ggplot.R")
+source("~/code/DAPC.R")
+
+`%not in%` <- function (x, table) is.na(match(x, table, nomatch=NA_integer_))
+
+# orders, colors, shapes
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+region_col <- c('#1b9e77','#d95f02','#7570b3')
+
+region_shape <- c(21, 23, 24)
+
+site_shape <- c(21, 21, 21, 23, 23, 23, 23, 24, 24, 24, 24)
+
+relationship_order <- c("unrelated", "halfsib", "fullsib")
+
+col_rel <- c("#969696", "#525252", "#252525")
+
+```
+
+# Import Data
+
+```{r, message=F}
+
+# genepop
+
+yoy.gen <- read.genepop(file = here("filter", "results", "yoy_final_site.gen"), ncode = 3L, quiet = FALSE)
+
+yoy_inds <- as_tibble_col(indNames(yoy.gen), column_name = "hiseq_id")
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "results", "yoy_final_strata.csv")) %>%
+  left_join(yoy_inds, .)
+
+# assign strata
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+```
+
+# All Individuals
+
+In a separate R terminal, run Wang's `trioml` method for all individuals to produce point estimates.
+
+Before running, remove loci with any missing data to reduce the run time. 
+
+```{r warning=FALSE, message=FALSE, eval = FALSE}
+
+library(related)
+library(adegenet)
+library(tidyverse)
+library(poppr)
+library(hierfstat)
+library(here)
+
+# genepop
+
+yoy.gen <- read.genepop(file = here("filter", "results", "yoy_final_site.gen"), ncode = 3L, quiet = FALSE)
+
+yoy_inds <- as_tibble_col(indNames(yoy.gen), column_name = "hiseq_id")
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "results", "yoy_final_strata.csv")) %>%
+  left_join(yoy_inds, .)
+
+# assign strata
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# remove loci with missing data
+
+temp.gen <- missingno(yoy.gen, type = "loci", cutoff = 0)
+
+## 2230 loci remaining ##
+
+# point estimates
+
+temp_df <- genind2df(temp.gen, usepop = FALSE, oneColPerAll = TRUE) %>%
+  rownames_to_column("hiseq_id")
+
+write_delim(temp_df, here("related", "data", "trioml.input"), col_names = FALSE, delim = "\t")
+
+genotypedata <- readgenotypedata(here("related", "data", "trioml.input"))
+
+related <- coancestry(genotypedata$gdata, trioml = 1)
+
+related <- related$relatedness
+
+write_csv(related, here("related", "data", "trioml_point.output"))
+
+```
+
+Redo to produce confidence intervals. 
+
+```{r warning=FALSE, message=FALSE, eval = FALSE}
+
+library(related)
+library(adegenet)
+library(tidyverse)
+library(poppr)
+library(hierfstat)
+library(here)
+
+# genepop
+
+yoy.gen <- read.genepop(file = here("filter", "results", "yoy_final_site.gen"), ncode = 3L, quiet = FALSE)
+
+yoy_inds <- as_tibble_col(indNames(yoy.gen), column_name = "hiseq_id")
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "results", "yoy_final_strata.csv")) %>%
+  left_join(yoy_inds, .)
+
+# assign strata
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# remove loci with missing data
+
+temp.gen <- missingno(yoy.gen, type = "loci", cutoff = 0)
+
+## 2230 loci remaining ##
+
+# point estimates
+
+temp_df <- genind2df(temp.gen, usepop = FALSE, oneColPerAll = TRUE) %>%
+  rownames_to_column("hiseq_id")
+
+write_delim(temp_df, here("related", "data", "trioml.input"), col_names = FALSE, delim = "\t")
+
+genotypedata <- readgenotypedata(here("related", "data", "trioml.input"))
+
+related <- coancestry(genotypedata$gdata, trioml = 2)
+
+related_output <- related$relatedness.ci95
+
+write_csv(related_output, here("related", "data", "trioml_ci.output"))
+
+```
+
+## Results
+
+Import results and use threshold hold of 0.2 to assess putative siblings.
+
+```{r}
+
+# point estimates
+
+trioml_point <- read_csv(here("related", "data", "trioml_point.output")) %>% 
+  select(1:5)
+
+temp1 <- trioml_point %>%
+  select(pair.no, ind1.id, ind2.id, trioml) %>%
+  rename(point = trioml) %>%
+  rename(hiseq_id = ind1.id) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, site_shrt, region, year, month,  point))
+  
+temp2 <- trioml_point %>%
+  select(ind2.id) %>%
+  rename(hiseq_id = ind2.id) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, site_shrt, region, year, month)) %>%
+  rename(hiseq_id_2 = hiseq_id) %>%
+  rename(sample_id_2 = sample_id) %>%
+  rename(stage_2 = stage) %>%
+  rename(sex_2 = sex) %>%
+  rename(site_shrt_2 = site_shrt) %>%
+  rename(region_2 = region) %>%
+  rename(year_2 = year) %>%
+  rename(month_2 = month)
+
+# combine
+
+trioml_point <- cbind(temp1, temp2)
+
+# ci estimates
+
+trioml_ci <- read_csv(here("related", "data", "trioml_ci.output")) %>% 
+  select("trioml.low", "trioml.high") %>% 
+  rename(low = trioml.low) %>%
+  rename(high = trioml.high)
+
+# combine
+
+trioml_results <- cbind(trioml_point, trioml_ci) %>% 
+  relocate("low", .before="point") %>% 
+  relocate("high", .after="point") %>% 
+  mutate(across(c(low, point, high), round, 2)) %>% 
+  arrange(desc(point))
+
+# export results
+
+write_csv(trioml_results, here("related", "results", "yoy_trioml_related.csv"))
+
+# putative siblings
+
+trioml_sibs <- trioml_results %>% 
+  filter(high >= 0.25)
+
+write_csv(trioml_sibs, here("related", "results", "yoy_trioml_sibs.csv"))
+
+count(trioml_sibs %>%
+  filter("region" == "region_2"))
+
+count(trioml_sibs %>%
+  filter("site_shrt" == "site_shrt_2"))
+
+```
+
+# By Region
+
+For the Atlantic, eastern and western Gulf individually, assess relatedness using `demerelate`.
+
+Atlantic.
+
+```{r warning=FALSE, message=FALSE, eval = FALSE}
+
+library(Demerelate)
+library(adegenet)
+library(tidyverse)
+library(poppr)
+library(hierfstat)
+library(here)
+source("~/code/genind.R")
+
+# genepop
+
+yoy.gen <- read.genepop(file = here("filter", "results", "yoy_final_site.gen"), ncode = 3L, quiet = FALSE)
+
+yoy_inds <- as_tibble_col(indNames(yoy.gen), column_name = "hiseq_id")
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "results", "yoy_final_strata.csv")) %>%
+  left_join(yoy_inds, .)
+
+# execute demerelate for each region
+
+## Atl
+
+atl_strata <- yoy_strata %>%
+  filter(region == "Atl")
+
+remove_inds <- anti_join(yoy_strata, atl_strata)
+remove_inds <- remove_inds$hiseq_id
+
+atl.gen <- gen.ind.rem.Ind(yoy.gen, remove_inds)
+
+atl_inds <- as_tibble_col(indNames(atl.gen), column_name = "hiseq_id")
+
+atl_strata <- left_join(atl_inds, atl_strata)
+
+strata(atl.gen) <- atl_strata
+
+setPop(atl.gen) <- ~region
+
+# generate genetic diversity stats
+
+gendiv <- adegenet::summary(atl.gen)
+
+# remove monomorphic loci
+
+ho <- as.data.frame(gendiv$Hobs) %>% 
+  rownames_to_column("LOCUS") %>%
+  rename(ho = `gendiv$Hobs`)
+
+monomorphic <- filter(ho, ho == 0)
+
+remove_loci <- monomorphic$LOCUS
+
+atl.gen <- genind.rem.loci(atl.gen, remove_loci)
+
+atl.gen <- missingno(atl.gen, type = "loci", cutoff = 0)
+
+atl_df <- genind2df(atl.gen, usepop = TRUE, oneColPerAll = TRUE) %>%
+  rownames_to_column("hiseq_id")
+
+demerelate <- Demerelate(atl_df, tab.dist = FALSE, ref.pop = FALSE, object=TRUE, value="wang", Fis = FALSE, iteration = 1000, pairs = 1000, file.output = TRUE, p.correct = TRUE, NA.rm = TRUE, genotype.ref = FALSE)
+
+```
+
+Eastern Gulf
+
+```{r warning=FALSE, message=FALSE, eval = FALSE}
+
+library(Demerelate)
+library(adegenet)
+library(tidyverse)
+library(poppr)
+library(hierfstat)
+library(here)
+source("~/code/genind.R")
+
+# genepop
+
+yoy.gen <- read.genepop(file = here("filter", "results", "yoy_final_site.gen"), ncode = 3L, quiet = FALSE)
+
+yoy_inds <- as_tibble_col(indNames(yoy.gen), column_name = "hiseq_id")
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "results", "yoy_final_strata.csv")) %>%
+  left_join(yoy_inds, .)
+
+# execute demerelate for each region
+
+## EGoM
+
+egom_strata <- yoy_strata %>%
+  filter(region == "EGoM")
+
+remove_inds <- anti_join(yoy_strata, egom_strata)
+remove_inds <- remove_inds$hiseq_id
+
+egom.gen <- gen.ind.rem.Ind(yoy.gen, remove_inds)
+
+egom_inds <- as_tibble_col(indNames(egom.gen), column_name = "hiseq_id")
+
+egom_strata <- left_join(egom_inds, egom_strata)
+
+strata(egom.gen) <- egom_strata
+
+setPop(egom.gen) <- ~region
+
+# generate genetic diversity stats
+
+gendiv <- adegenet::summary(egom.gen)
+
+# remove monomorphic loci
+
+ho <- as.data.frame(gendiv$Hobs) %>% 
+  rownames_to_column("LOCUS") %>%
+  rename(ho = `gendiv$Hobs`)
+
+monomorphic <- filter(ho, ho == 0)
+
+remove_loci <- monomorphic$LOCUS
+
+egom.gen <- genind.rem.loci(egom.gen, remove_loci)
+
+egom.gen <- missingno(egom.gen, type = "loci", cutoff = 0)
+
+egom_df <- genind2df(egom.gen, usepop = TRUE, oneColPerAll = TRUE) %>%
+  rownames_to_column("hiseq_id")
+
+demerelate <- Demerelate(egom_df, tab.dist = FALSE, ref.pop = FALSE, object=TRUE, value="wang", Fis = FALSE, iteration = 1000, pairs = 1000, file.output = TRUE, p.correct = TRUE, NA.rm = TRUE, genotype.ref = FALSE)
+
+```
+
+Western Gulf
+
+```{r warning=FALSE, message=FALSE, eval = FALSE}
+
+library(Demerelate)
+library(adegenet)
+library(tidyverse)
+library(poppr)
+library(hierfstat)
+library(here)
+source("~/code/genind.R")
+
+# genepop
+
+yoy.gen <- read.genepop(file = here("filter", "results", "yoy_final_site.gen"), ncode = 3L, quiet = FALSE)
+
+yoy_inds <- as_tibble_col(indNames(yoy.gen), column_name = "hiseq_id")
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "results", "yoy_final_strata.csv")) %>%
+  left_join(yoy_inds, .)
+
+# execute demerelate for each region
+
+## WGoM
+
+wgom_strata <- yoy_strata %>%
+  filter(region == "WGoM")
+
+remove_inds <- anti_join(yoy_strata, wgom_strata)
+remove_inds <- remove_inds$hiseq_id
+
+wgom.gen <- gen.ind.rem.Ind(yoy.gen, remove_inds)
+
+wgom_inds <- as_tibble_col(indNames(wgom.gen), column_name = "hiseq_id")
+
+wgom_strata <- left_join(wgom_inds, wgom_strata)
+
+strata(wgom.gen) <- wgom_strata
+
+setPop(wgom.gen) <- ~region
+
+# generate genetic diversity stats
+
+gendiv <- adegenet::summary(wgom.gen)
+
+# remove monomorphic loci
+
+ho <- as.data.frame(gendiv$Hobs) %>% 
+  rownames_to_column("LOCUS") %>%
+  rename(ho = `gendiv$Hobs`)
+
+monomorphic <- filter(ho, ho == 0)
+
+remove_loci <- monomorphic$LOCUS
+
+wgom.gen <- genind.rem.loci(wgom.gen, remove_loci)
+
+wgom.gen <- missingno(wgom.gen, type = "loci", cutoff = 0)
+
+wgom_df <- genind2df(wgom.gen, usepop = TRUE, oneColPerAll = TRUE) %>%
+  rownames_to_column("hiseq_id")
+
+demerelate <- Demerelate(wgom_df, tab.dist = FALSE, ref.pop = FALSE, object=TRUE, value="wang", Fis = FALSE, iteration = 1000, pairs = 1000, file.output = TRUE, p.correct = TRUE, NA.rm = TRUE, genotype.ref = FALSE)
+
+```
+
+Move `demerelate` directory from to `relatedness` directory. The name of the `demerelate` directory changes with each run.
+
+```{bash}
+
+# you may have to look for the demerelate folders and change the path
+
+cd ~/Projects/us_blacktips/filter/data/
+
+mv Demerelate* ~/Projects/us_blacktips/related/data/.
+
+```
+
+## Results
+
+#### Atlantic
+
+`Demerelate` uses simulations to generate pairs of full and half siblings and unrelated individuals. Use these relationships to determine the thresholds for identifying full and half siblings. 
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+sim_ur_atl <- read.table(here("related", "data", "Demerelate-0.2835", "Random.NonRelated.relatedness.overall.txt")) %>%
+  rename(unrelated = wang)
+
+sim_hs_atl <- read.table(here("related", "data", "Demerelate-0.2835", "Random.Halfsib.relatedness.overall.txt")) %>%
+  rename(halfsib = wang)
+
+sim_fs_atl <- read.table(here("related", "data", "Demerelate-0.2835", "Random.Fullsib.relatedness.overall.txt")) %>%
+  rename(fullsib = wang)
+
+# combine
+
+sim_atl <- cbind(sim_ur_atl, sim_hs_atl, sim_fs_atl) %>% 
+  gather(relationship, wang) %>%
+  mutate(relationship = ordered(relationship, levels = relationship_order)) %>% 
+  mutate_if(is.numeric, round, 2)
+
+# plot histograms of relatedness 
+
+atl_plot <- ggplot(sim_atl, aes(x=wang, fill = relationship, label = relationship, color = relationship)) +
+  geom_histogram(binwidth = 0.01, alpha=0.6, position = 'identity', show.legend = F) +
+  #geom_vline(aes(xintercept = 0),
+   #          color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = 0.25),
+             color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = 0.5),
+             color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = quantile(sim_hs_atl, 0.01, na.rm = TRUE)),
+             color = "red", linetype = "dotted", size = 0.75) +
+  geom_vline(aes(xintercept = quantile(sim_fs_atl, 0.01, na.rm = TRUE)),
+             color = "red", linetype = "dotted", size = 0.75) +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+  scale_fill_manual(values=col_rel) +
+  scale_color_manual(values=col_rel) +
+  ggtitle("Atlantic") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+atl_plot
+
+ggsave(here("related", "results", "atl_related_sim.png"))
+
+# full sib threshold
+
+fs_thres_atl <- round(quantile(sim_fs_atl, 0.01, na.rm = TRUE), 2)
+fs_thres_atl
+
+# half sib threshold
+
+hs_thres_atl <- round(quantile(sim_hs_atl, 0.01, na.rm = TRUE), 2)
+hs_thres_atl
+
+```
+
+Identify siblings.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+atl_related <- read.table(here("related", "data", "Demerelate-0.2835", "Empirical.relatedness.Atl.txt")) %>%
+  rownames_to_column() %>%
+  separate(rowname, into = c("ind1", "ind2"), sep = "_(?=[A-Z])", remove = TRUE) %>%
+  mutate_if(is.numeric, round, 5) %>%
+  mutate(pop = "Atl")
+
+# match to strata
+
+related1 <- atl_related %>%
+  select(ind1, ind2, wang) %>%
+  rename(hiseq_id = ind1) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, region, site_shrt, latitude, longitude, year, month, tl, wang))
+
+related2 <- atl_related %>%
+  select(ind2) %>%
+  rename(hiseq_id = ind2) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, region, site_shrt, latitude, longitude, year, month, tl)) %>%
+  rename(hiseq_id_2 = hiseq_id) %>%
+  rename(sample_id_2 = sample_id) %>%
+  rename(stage_2 = stage) %>%
+  rename(sex_2 = sex) %>%
+  rename(region_2 = region) %>%
+  rename(site_shrt_2 = site_shrt) %>%
+  rename(latitude_2 = latitude) %>%
+  rename(longitude_2 = longitude) %>%
+  rename(year_2 = year) %>%
+  rename(month_2 = month) %>%
+  rename(tl_2 = tl)
+
+atl_related <- cbind(related1, related2) %>%
+  arrange(desc(wang)) %>% 
+  mutate_at("wang", round, 2)
+
+write_csv(atl_related, here("related", "results", "atl_related.csv"))
+
+# Plot
+
+ggplot(atl_related, aes(x = wang)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(wang)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+             color = "black", linetype = "solid", size = 1) +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+  ggtitle("Atlantic") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggsave(here("related", "results", "atl_related.png"))
+
+# full siblings
+
+fs_atl <- atl_related %>% 
+  filter(wang >= fs_thres_atl)
+
+# half siblings
+
+hs_atl <- atl_related %>% 
+  filter(wang >= hs_thres_atl & wang <= fs_thres_atl)
+
+```
+
+#### Eastern Gulf
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+sim_ur_egom <- read.table(here("related", "data", "Demerelate-0.1564", "Random.NonRelated.relatedness.overall.txt")) %>%
+  rename(unrelated = wang)
+
+sim_hs_egom <- read.table(here("related", "data", "Demerelate-0.1564", "Random.Halfsib.relatedness.overall.txt")) %>%
+  rename(halfsib = wang)
+
+sim_fs_egom <- read.table(here("related", "data", "Demerelate-0.1564", "Random.Fullsib.relatedness.overall.txt")) %>%
+  rename(fullsib = wang)
+
+# combine
+
+sim_egom <- cbind(sim_ur_egom, sim_hs_egom, sim_fs_egom) %>% 
+  gather(relationship, wang) %>%
+  mutate(relationship = ordered(relationship, levels = relationship_order)) %>% 
+  mutate_if(is.numeric, round, 2)
+
+# plot histograms of relatedness 
+
+egom_plot <- ggplot(sim_egom, aes(x=wang, fill = relationship, label = relationship, color = relationship)) +
+  geom_histogram(binwidth = 0.01, alpha=0.6, position = 'identity') +
+#  geom_vline(aes(xintercept = 0),
+ #            color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = 0.25),
+             color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = 0.5),
+             color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = quantile(sim_hs_egom, 0.01, na.rm = TRUE)),
+             color = "red", linetype = "dotted", size = 0.75) +
+  geom_vline(aes(xintercept = quantile(sim_fs_egom, 0.01, na.rm = TRUE)),
+             color = "red", linetype = "dotted", size = 0.75) +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+  scale_fill_manual(values=col_rel) +
+  scale_color_manual(values=col_rel) +
+  ggtitle("Eastern Gulf") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+egom_plot
+
+ggsave(here("related", "results", "egom_related_sim.png"))
+
+# full sib threshold
+
+fs_thres_egom <- round(quantile(sim_fs_egom, 0.01, na.rm = TRUE), 2)
+fs_thres_egom
+
+# half sib threshold
+
+hs_thres_egom <- round(quantile(sim_hs_egom, 0.01, na.rm = TRUE), 2)
+hs_thres_egom
+
+```
+
+Identify siblings.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+egom_related <- read.table(here("related", "data", "Demerelate-0.1564", "Empirical.relatedness.EGoM.txt")) %>%
+  rownames_to_column() %>%
+  separate(rowname, into = c("ind1", "ind2"), sep = "_(?=[A-Z])", remove = TRUE) %>%
+  mutate_if(is.numeric, round, 5) %>%
+  mutate(pop = "egom")
+
+# match to strata
+
+related1 <- egom_related %>%
+  select(ind1, ind2, wang) %>%
+  rename(hiseq_id = ind1) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, region, site_shrt, latitude, longitude, year, month, tl, wang))
+
+related2 <- egom_related %>%
+  select(ind2) %>%
+  rename(hiseq_id = ind2) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, region, site_shrt, latitude, longitude, year, month, tl)) %>%
+  rename(hiseq_id_2 = hiseq_id) %>%
+  rename(sample_id_2 = sample_id) %>%
+  rename(stage_2 = stage) %>%
+  rename(sex_2 = sex) %>%
+  rename(region_2 = region) %>%
+  rename(site_shrt_2 = site_shrt) %>%
+  rename(latitude_2 = latitude) %>%
+  rename(longitude_2 = longitude) %>%
+  rename(year_2 = year) %>%
+  rename(month_2 = month) %>%
+  rename(tl_2 = tl)
+
+egom_related <- cbind(related1, related2) %>%
+  arrange(desc(wang)) %>% 
+  mutate_at("wang", round, 2)
+
+write_csv(egom_related, here("related", "results", "egom_related.csv"))
+
+# Plot
+
+ggplot(egom_related, aes(x = wang)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(wang)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+             color = "black", linetype = "solid", size = 1) +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+  ggtitle("Eastern Gulf") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggsave(here("related", "results", "egom_related.png"))
+
+# full siblings
+
+fs_egom <- egom_related %>% 
+  filter(wang >= fs_thres_egom)
+
+# half siblings
+
+hs_egom <- egom_related %>% 
+  filter(wang >= hs_thres_egom & wang <= fs_thres_egom)
+
+```
+
+#### Western Gulf
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+sim_ur_wgom <- read.table(here("related", "data", "Demerelate0.7719", "Random.NonRelated.relatedness.overall.txt")) %>%
+  rename(unrelated = wang)
+
+sim_hs_wgom <- read.table(here("related", "data", "Demerelate0.7719", "Random.Halfsib.relatedness.overall.txt")) %>%
+  rename(halfsib = wang)
+
+sim_fs_wgom <- read.table(here("related", "data", "Demerelate0.7719", "Random.Fullsib.relatedness.overall.txt")) %>%
+  rename(fullsib = wang)
+
+# combine
+
+sim_wgom <- cbind(sim_ur_wgom, sim_hs_wgom, sim_fs_wgom) %>% 
+  gather(relationship, wang) %>%
+  mutate(relationship = ordered(relationship, levels = relationship_order)) %>% 
+  mutate_if(is.numeric, round, 2)
+
+# plot histograms of relatedness 
+
+wgom_plot <- ggplot(sim_wgom, aes(x=wang, fill = relationship, label = relationship, color = relationship)) +
+  geom_histogram(binwidth = 0.01, alpha=0.6, position = 'identity', show.legend = F) +
+ # geom_vline(aes(xintercept = 0),
+  #           color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = 0.25),
+             color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = 0.5),
+             color = "black", linetype = "solid", size = 0.75) +
+  geom_vline(aes(xintercept = quantile(sim_hs_wgom, 0.01, na.rm = TRUE)),
+             color = "red", linetype = "dotted", size = 0.75) +
+  geom_vline(aes(xintercept = quantile(sim_fs_wgom, 0.01, na.rm = TRUE)),
+             color = "red", linetype = "dotted", size = 0.75) +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+  scale_fill_manual(values=col_rel) +
+  scale_color_manual(values=col_rel) +
+  ggtitle("Western Gulf") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+wgom_plot
+
+ggsave(here("related", "results", "wgom_related_sim.png"))
+
+# full sib threshold
+
+fs_thres_wgom <- round(quantile(sim_fs_wgom, 0.01, na.rm = TRUE), 2)
+fs_thres_wgom
+
+# half sib threshold
+
+hs_thres_wgom <- round(quantile(sim_hs_wgom, 0.01, na.rm = TRUE), 2)
+hs_thres_wgom
+
+```
+
+Identify siblings.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+wgom_related <- read.table(here("related", "data", "Demerelate0.7719", "Empirical.relatedness.WGoM.txt")) %>%
+  rownames_to_column() %>%
+  separate(rowname, into = c("ind1", "ind2"), sep = "_(?=[A-Z])", remove = TRUE) %>%
+  mutate_if(is.numeric, round, 5) %>%
+  mutate(pop = "wgom")
+
+# match to strata
+
+related1 <- wgom_related %>%
+  select(ind1, ind2, wang) %>%
+  rename(hiseq_id = ind1) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, region, site_shrt, latitude, longitude, year, month, tl, wang))
+
+related2 <- wgom_related %>%
+  select(ind2) %>%
+  rename(hiseq_id = ind2) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, region, site_shrt, latitude, longitude, year, month, tl)) %>%
+  rename(hiseq_id_2 = hiseq_id) %>%
+  rename(sample_id_2 = sample_id) %>%
+  rename(stage_2 = stage) %>%
+  rename(sex_2 = sex) %>%
+  rename(region_2 = region) %>%
+  rename(site_shrt_2 = site_shrt) %>%
+  rename(latitude_2 = latitude) %>%
+  rename(longitude_2 = longitude) %>%
+  rename(year_2 = year) %>%
+  rename(month_2 = month) %>%
+  rename(tl_2 = tl)
+
+wgom_related <- cbind(related1, related2) %>%
+  arrange(desc(wang)) %>% 
+  mutate_at("wang", round, 2)
+
+write_csv(wgom_related, here("related", "results", "wgom_related.csv"))
+
+# Plot
+
+ggplot(wgom_related, aes(x = wang)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(wang)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+             color = "black", linetype = "solid", size = 1) +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+  ggtitle("Eastern Gulf") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggsave(here("related", "results", "wgom_related.png"))
+
+# full siblings
+
+fs_wgom <- wgom_related %>% 
+  filter(wang >= fs_thres_wgom)
+
+# half siblings
+
+hs_wgom <- wgom_related %>% 
+  filter(wang >= hs_thres_wgom & wang <= fs_thres_wgom)
+
+```
+
+Supporting figure of distribution of simulated values
+
+```{r fig.height=5, fig.width=15, message=FALSE, warning=FALSE}
+
+atl_plot + egom_plot + wgom_plot
+
+ggsave(here("related", "results", "simulations_by_region.png"))
+
+```
+
+
+### Siblings
+
+Identify randomly and non-randomly sampled siblings.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# collect all siblings
+
+deme_sibs <- rbind(fs_atl, hs_atl, fs_egom, hs_egom, fs_wgom, hs_wgom) %>% 
+  mutate(type = case_when(wang > 0.4 ~ "fullsib", type = wang < 0.4 ~ "halfsib")) %>% 
+  relocate(type, .after = "wang") %>% 
+  arrange(desc(wang))
+
+# non-randomly sampled sibs
+
+nr_kin <- c("TX_201737", "TX_201740", "TX_201741", "TX_201743", "TX_201760", "TX_201735", "TX_47212", "2019-0624-05-02", "JG_2015019")
+
+sibs_non_random <- deme_sibs %>% 
+  filter(sample_id %in% nr_kin | sample_id_2 %in% nr_kin) %>%
+  arrange(desc(wang))
+
+write_csv(sibs_non_random, here("related", "results", "sibs_non_random.csv"))
+
+# produce list to remove from vcf
+
+sibs_non_random %>%
+  select(hiseq_id_2) %>% 
+  write_delim(., here("related", "data", "non_random.sib"))
+
+# randomly sampled sibs
+
+sibs_random <- anti_join(deme_sibs, sibs_non_random) %>%
+  arrange(desc(wang)) %>% 
+  mutate(year_diff = abs(year - year_2)) %>% 
+  relocate(year_diff, .after = "type")
+
+write_csv(sibs_random, here("related", "results", "sibs_random.csv"))
+
+```
+
+# Produce Files
+
+Produce files without one individual from non-randomly sampled sibling pairs for population genetic analyses.
+
+```{r}
+
+sibs_non_random <- read_csv(here("related", "results", "sibs_non_random.csv"))
+
+# export 
+
+sibs_non_random %>% 
+  select(hiseq_id) %>% 
+  distinct() %>% 
+  write_delim(here("related", "results", "remove.nonrandom_sibs"))
+
+# produce genepop
+
+gen <- read.genepop(file = here::here("filter", "results", "yoy_final_site.gen"), ncode = 3L, quiet = FALSE)
+
+yoy.gen <- gen.ind.rem.Ind(gen, sibs_non_random$hiseq_id)
+
+yoy_inds <- as_tibble_col(indNames(yoy.gen), column_name = "hiseq_id")
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "results", "yoy_final_strata.csv")) %>%
+  left_join(yoy_inds, .)
+
+# assign strata
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# export strata and genepop
+
+# remove monomorphic loci
+
+gendiv <- summary(yoy.gen)
+
+dat <- genind2hierfstat(yoy.gen)
+
+gendiv2 <- basic.stats(dat)
+
+# observed heterozygosity per locus
+
+Ho <- as.data.frame(gendiv$Hobs) %>% 
+  rownames_to_column("LOCUS") %>%
+  rename(Ho = `gendiv$Hobs`)
+
+monomorphic <- filter(Ho, Ho == 0) %>%
+  select(LOCUS)
+
+View(monomorphic)
+
+write_delim(monomorphic, here("related", "data", "monomorphic_sibs.loci"), col_names = FALSE, delim = "\t")
+
+remove_loci <- monomorphic$LOCUS
+
+# produce final dataset
+
+yoy.gen <- genind.rem.loci(yoy.gen, remove_loci)
+
+# export genepop by site
+
+setPop(yoy.gen) <- ~site_shrt
+
+yoy.gen$pop <- factor(yoy.gen$pop, levels=site_order_shrt)
+
+writeGenPop(yoy.gen, file.name = here("yoy_site.gen"), comment = "yoy_site.gen")
+
+# Export strata
+
+write_csv(yoy_strata, here("yoy_strata.csv"))
+
+```
+
+Convert genepop file organised by site into `BayeScan` and `Arlequin` files using `pgdspider`. 
+  
+```{bash, eval=FALSE}
+
+cd ~/Projects/us_blacktips
+
+# bayescan
+
+java -jar /usr/local/bin/PGDSpider2-cli.jar -inputfile yoy_site.gen -inputformat GENEPOP -outputfile fst_outlier/data/yoy_site_bs.txt -outputformat BAYE_SCAN -spid ~/code/genepop_bayescan.spid
+
+# arlequin
+
+java -jar /usr/local/bin/PGDSpider2-cli.jar -inputfile yoy_site.gen -inputformat GENEPOP -outputfile fst_outlier/data/yoy_site.arp -outputformat ARLEQUIN -spid ~/code/genepop_arl.spid
+
+# outflank 
+
+# remove non randomly sampled sibs from filtered vcf
+
+vcftools --vcf filter/data/yoy_filt.recode.vcf --out fst_outlier/data/yoy_temp --remove related/results/remove.nonrandom_sibs --recode --recode-INFO-all
+
+# move loci made monomorphic by removing non-random sibs (if any)
+
+#vcftools --vcf fst_outlier/data/yoy_temp.recode.vcf --not-chr dDocent_Contig_20294 -- out fst_outlier/data/yoy_outflank --recode --recode-INFO-all
+
+vcftools --vcf fst_outlier/data/yoy_temp.recode.vcf --out fst_outlier/data/yoy_outflank --012
+
+```
+

@@ -1,0 +1,4630 @@
+---
+title: "Filtering: YOY Blacktips in US. Waters"
+author: "DG Swift"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+  
+# Environment
+  
+```{r, message=FALSE}
+
+# set working directory
+
+#setwd("~/Projects/Blacktip_Pop_Gen/Sequencing_Analysis/Code")
+
+.libPaths("/usr/lib64/R/library")
+
+# invalidate cache when the package version changes
+
+knitr::opts_chunk$set(
+	message = FALSE,
+	warning = FALSE,
+	cache.extra = packageVersion("tint"),
+	tidy = FALSE,
+	echo = FALSE
+)
+options(htmltools.dir.version = FALSE)
+
+# conflicts
+
+library(conflicted)
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("s.label", "adegraphics")
+conflict_prefer("s.value", "adegraphics")
+conflict_prefer("scalebar", "raster")
+conflict_prefer("rename", "dplyr")
+
+# packages
+
+library(tidyverse)
+library(broom)
+library(adegenet)
+library(hierfstat)
+library(pegas)
+library(ggthemes)
+library(coda)
+library(related)
+library(poppr)
+library(zvau)
+library(rgdal)
+library(ggsn)
+library(ggmap)
+library(glue)
+library(janitor)
+library(here)
+library(readxl)
+library(vcfR)
+
+# source functions
+
+source("~/code/genind.R")
+source("~/code/PCA.R")
+source("~/code/ggplot.R")
+source("~/code/DAPC.R")
+source("~/code/VCFfilterstats.R")
+#source("~/code/HaplotypR.R")
+
+`%not in%` <- function (x, table) is.na(match(x, table, nomatch=NA_integer_))
+
+# orders, colors, shapes
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+region_col <- c('#1b9e77','#d95f02','#7570b3')
+
+lib_col <- c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF33")
+
+region_shape <- c(21, 23, 24)
+
+site_shape <- c(21, 21, 21, 23, 23, 23, 23, 24, 24, 24, 24)
+
+```
+
+# Import Data
+
+```{r, message=F}
+
+clim_sample_data <- read_excel(here("filter", "data", "clim_sample_data.xlsx")) %>%
+  mutate(library = str_pad(library, width=2, pad="0"))
+
+# produce dataset of YOY sampled close to shore in US
+
+yoy_sample_data <- filter(clim_sample_data, stage == "YOY") %>%
+  filter(region == "Atl" | region =="EGoM" | region =="WGoM") %>%
+  filter(site != "Gulf") %>% 
+  mutate_at(c("latitude", "longitude"), as.numeric) %>% 
+  mutate(across(c(latitude, longitude), round, 5)) %>% 
+  mutate_at(c("pcl", "fl", "tl"), as.integer)
+
+```
+
+# Map of Samples
+
+```{r fig.height=10, fig.width=18, message=FALSE, warning=FALSE}
+
+# Map Samples
+
+range(yoy_sample_data$latitude, na.rm = T)
+range(yoy_sample_data$longitude, na.rm = T)
+
+# Create basemap
+
+map <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_land")
+
+map <- tidy(map) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+    droplevels()
+
+# Nation lines basemap
+
+nations <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_admin_0_countries")
+
+nations <- tidy(nations) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+  droplevels()
+
+# State line basemap
+
+states <- readOGR(dsn = "~/Projects/maps/", layer = "ne_10m_admin_1_states_provinces_lines")
+
+states <- tidy(states) %>%
+   filter(long >= -105 & long <= -79 & lat >= 17 & lat <= 34) %>%
+  droplevels()
+
+# Plot samples by site
+
+## limits for stock boundaries
+
+atl_gom_bnd <- data.frame(x1 = -80, x2 = -79, y1 = 25.34, y2 = 25.34)
+
+gom_bnd <- data.frame(x1 = -88, x2 = -88, y1 = 25, y2 = 30.7)
+
+ggplot() +
+  geom_segment(aes(x = x1, y = y1, xend = x2, yend = y2), size = 1.5, color = "darkblue", linetype = "dotted", data = atl_gom_bnd) +
+  geom_segment(aes(x = x1, y = y1, xend = x2, yend = y2), size = 1.5, color = "darkblue", linetype = "dotted", data = gom_bnd) +
+  geom_path(data = map, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.5) +
+  geom_path(data = states, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.5, linetype = "longdash") +
+  geom_path(data = nations, 
+            aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.75, linetype = "solid") +
+  geom_polygon(fill="lightgray", colour = "white") +
+  geom_point(data = yoy_sample_data,
+             aes(x = longitude, y = latitude, fill = region, shape = region), size = 5, alpha = 0.8) +
+  north(map, location = "topright", scale = 0.1, symbol = 1, anchor = c(x = -94.75, y = 33.75)) +
+  ggsn::scalebar(map, location = "topright", dist = 100, dist_unit = "km", transform = TRUE, model = "WGS84", st.size = 6, anchor = c(x = -95, y = 31.5)) +
+  xlim(-98, -79) +
+  ylim(25, 34) +
+  scale_x_continuous("Longitude", limits = c(-98, -79), breaks = c(-97.5, -95.0, -92.5, -90.0, -87.5, -85.0, -82.5, -80.0), labels = c(-97.5, -95.0, -92.5, -90.0, -87.5, -85.0, -82.5, -80.0)) +
+  scale_y_continuous("Latitude", limits = c(25.0, 33.5), breaks = c(25.0, 27.5, 30.0, 32.5), labels = c(25.0, 27.5, 30.0, 32.5)) +
+  scale_size_continuous(range = c(7,21)) +
+  scale_color_manual(values = region_col) +
+  scale_fill_manual(values = region_col) +
+  scale_shape_manual(values = region_shape) +
+  theme_standard +
+  theme(legend.text=element_text(size=16), legend.title=element_text(size=20), axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+ggsave(here("filter", "results", "yoy_map.png"))
+
+```
+
+# SNP Filter
+
+dDocent uses FreeBayes to call SNPs and write a VCF-file `TotalrawSNPs.vcf`. This dataset is filtered to remove low quality and artefactual SNP sites, paralogs and low quality individuals based on levels of missing data, minimum/maximum read depth, genotype call rate, and minor allele frequencies. Because 11 libraries were sequenced, great care is also taken to reduce loci that are inconsistent across libraries, i.e., library effects.
+
+#### Individuals by Library, Region, and Site
+
+Produce a dataset containing US YOY individuals from sites that have sufficient samples. Produce files for each library, region, and site.
+
+```{r Assign sample data}
+
+# ID sites with > 15 inds
+
+yoy_site <- yoy_sample_data %>%
+  count(site) %>%
+  arrange(desc(n)) %>%
+  filter(n >=15)
+
+yoy_sites <- yoy_site$site
+
+# Produce YOY sample data with only YOY from these sites
+
+yoy_sample_data <- filter(yoy_sample_data, stage == "YOY") %>%
+  filter(site %in% yoy_sites) %>%
+  mutate(site_shrt = case_when(site == "Bulls_Bay" ~ "BLB",
+                               site == "St._Helena_Sound" ~ "SHS",
+                               site == "Port_Royal_Sound" ~ "PRS",
+                               site == "Terra_Ceia_Bay" ~ "TCB",
+                               site == "Waccasassa_Bay" ~ "WAB",
+                               site == "Apalachicola_Bay" ~ "APB",
+                               site == "Mobile_Bay" ~ "MOB",
+                               site == "Galveston_Bay" ~ "GAB",
+                               site == "Matagorda_Bay" ~ "MAB",
+                               site == "San_Antonio_Bay" ~ "SAB",
+                               site == "Corpus_Christi_Bay" ~ "CCB")) %>%
+  relocate(site_shrt, .before="region") %>% 
+  mutate(site_shrt = ordered(site_shrt, levels = site_order_shrt))
+
+write_csv(yoy_sample_data, here("filter", "data", "yoy_sample_data.csv"))
+
+# produce data set of samples only from the 11 sites
+
+yoy_inds <- yoy_sample_data %>%
+  select(hiseq_id) %>% 
+  write_delim(., here("filter", "data", "yoy.ind"))
+              
+# create files with individuals by library
+
+libs <- yoy_sample_data$library %>% 
+  unique
+
+for (i in libs) {
+    temp <- yoy_sample_data %>%
+      filter(library == i) %>%
+      select(hiseq_id)
+    
+    path <- glue("lib{i}.ind")    
+    write_delim(temp, here("filter", "data", path))
+}
+
+# create files with individuals by site
+
+sites <- yoy_sample_data$site_shrt %>% 
+  unique
+
+for (i in sites) {
+    temp <- yoy_sample_data %>%
+      filter(site_shrt == i) %>%
+      select(hiseq_id)
+    
+    path <- glue("{i}.ind")    
+    write_delim(temp, here("filter", "data", path))
+}
+
+# count the number of individuals in each library
+
+libs <- count(yoy_sample_data, library) %>%
+  arrange(library)
+
+# count the number of individuals in each Region
+
+regions <- count(yoy_sample_data, region) %>%
+  arrange(desc(n))
+
+regions_libs <- yoy_sample_data %>% 
+  group_by(region) %>% 
+  count(library)
+
+write_csv(regions_libs, here("filter", "data", "regions_libs.csv"))
+
+# count the number of individuals in each Site
+
+sites <- count(yoy_sample_data, site_shrt) %>%
+  arrange(desc(n))
+
+sites_libs <- yoy_sample_data %>% 
+  group_by(site_shrt) %>% 
+  count(library)
+
+write_csv(sites_libs, here("filter", "data", "sites_libs.csv"))
+
+```
+
+#### Retain YOY Only
+
+Remove all individuals apart from YOY from representative sites from vcf and produce stats.
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf Cli.recode.vcf --out yoy --keep yoy.ind --recode --recode-INFO-all
+
+```
+
+#### Filter 1: Quality, Depth and Minor Allele Count
+
+The QUAL column of a VCF file is a phred-based score indicating the probability that the variant shown in the ALT column is wrong. Given the Phred quality score (Q), and the probability that a base is incorrectly called (P), Q = -10(Log10P).
+
+A quality score of 20 indicates, a 1 in 100 chance that the SNP site has been called incorrectly (i.e. 99% probability that correct call)
+
+Filter loci with quality score < 20, maximum mean depth of 2500 reads, and a minimum genotype depth of 5, i.e. genotypes with less than 5 reads are coded as missing
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+# Filter LQ SNP calls
+
+vcftools --vcf yoy.recode.vcf --out yoy_f1 --minQ 20 --minGQ 20 --minDP 5 --maxDP 2500 --mac 3 --recode --recode-INFO-all
+
+# Stats 
+
+vcftools --vcf yoy_f1.recode.vcf --out yoy_f1 --depth
+vcftools --vcf yoy_f1.recode.vcf --out yoy_f1 --site-mean-depth
+vcftools --vcf yoy_f1.recode.vcf --out yoy_f1 --missing-indv
+vcftools --vcf yoy_f1.recode.vcf --out yoy_f1 --missing-site
+vcftools --vcf yoy_f1.recode.vcf --out yoy_f1 --het
+vcftools --vcf yoy_f1.recode.vcf --out yoy_f1 --geno-depth
+vcftools --vcf yoy_f1.recode.vcf --out yoy_f1 --singletons
+
+
+```
+
+Review stats
+
+```{r fig.height=5, fig.width=5,  message=FALSE, warning=FALSE}
+
+# Load stats files
+
+ind_stats_yoy_f1 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f1") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data) %>% 
+  filter(site_shrt != "FBC" & site_shrt != "LLM") %>% 
+  write_csv(., here("filter", "data", "ind_stats_yoy_f1.csv"))
+
+loci_stats_yoy_f1 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f1")
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f1, aes(x = MISS_yoy_f1)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "missing data per individual") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f1, aes(x = Fis_yoy_f1)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f1, aes(x = MEAN_DEPTH_yoy_f1)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Individual") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f1, aes(x = MEAN_DEPTH_yoy_f1, y = MISS_yoy_f1)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f1, aes(x = MISS_yoy_f1)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f1, aes(x = MEAN_DEPTH_yoy_f1)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f1, aes(x = MEAN_DEPTH_yoy_f1, y = MISS_yoy_f1)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f1, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+count(ind_stats_yoy_f1)
+
+count(loci_stats_yoy_f1)
+
+
+```
+
+Plot Fis by library
+
+```{r fig.height=10, fig.width=5,  message=FALSE, warning=FALSE}
+
+ggplot(ind_stats_yoy_f1, aes(x = Fis_yoy_f1)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f1, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  facet_grid(library ~ .) +
+  theme_standard
+
+fis_lib_f1 <- ind_stats_yoy_f1 %>%
+  select(c(hiseq_id, library, Fis_yoy_f1)) %>%
+  spread(key = library, value = Fis_yoy_f1)
+
+```
+
+Convert variant calls into phased SNP and INDEL genotypes.
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcfallelicprimitives yoy_f1.recode.vcf --keep-info --keep-geno > yoy_prim.vcf
+
+vcftools --vcf yoy_prim.vcf --out yoy_prim_no_indels --remove-indels --recode --recode-INFO-all
+
+
+```
+
+#### Filter 2: Missing Data By Individual & SNP
+
+Remove loci with genotype call rate <30%
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_prim_no_indels.recode.vcf --out yoy_f2a --max-missing 0.3 --min-meanDP 10 --recode --recode-INFO-all
+
+vcftools --vcf yoy_f2a.recode.vcf --out yoy_f2a --missing-indv
+
+
+```
+ 
+Flag individuals with > 95% missing data
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Determine cutoff
+
+imiss <- read_delim(here("filter", "data", "yoy_f2a.imiss"), delim = "\t") %>%
+  arrange(desc(F_MISS))
+
+ggplot(imiss, aes(x = F_MISS)) +
+  geom_histogram(binwidth = 0.05, color = "black", fill = "grey") +
+  geom_vline(xintercept = 0.9, color = "red", linetype = "dashed", size = 1) +
+  theme_standard
+
+remove_ind <- imiss %>%
+  filter(F_MISS > 0.9) %>%
+  select(INDV)
+
+#View(lq_ind)
+
+write_delim(remove_ind, here("filter", "data", "yoy_f2a_remove.ind"))
+
+```
+
+Remove flagged individuals, then remove loci with genotype call rate <40%
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f2a.recode.vcf --out yoy_f2b --remove yoy_f2a_remove.ind --recode --recode-INFO-all
+
+vcftools --vcf yoy_f2b.recode.vcf --out yoy_f2c --max-missing 0.4  --recode --recode-INFO-all
+
+vcftools --vcf yoy_f2c.recode.vcf --out yoy_f2c --missing-indv
+
+
+```
+
+Identify individuals with high missing data
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Determine cutoff
+
+imiss <- read_delim(here("filter", "data", "yoy_f2c.imiss"), delim = "\t") %>%
+  arrange(desc(F_MISS))
+
+ggplot(imiss, aes(x = F_MISS)) +
+  geom_histogram(binwidth = 0.05, color = "black", fill = "grey") +
+  geom_vline(xintercept = 0.6, color = "red", linetype = "dashed", size = 1) +
+  theme_standard
+
+remove_ind <- imiss %>%
+  filter(F_MISS > 0.6) %>%
+  select(INDV)
+
+#View(lq_ind)
+
+write_delim(remove_ind, here("filter", "data", "yoy_f2c_remove.ind"))
+
+```
+
+Remove flagged individuals and generate missing data stats per locus for all libraries
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+# Remove flagged individuals
+
+vcftools --vcf yoy_f2c.recode.vcf --out yoy_2d --remove yoy_f2c_remove.ind --recode --recode-INFO-all
+
+# produce stats for each library
+
+ls lib*.ind | cut -f1 -d"." | while read i; do vcftools --vcf yoy_f2d.recode.vcf --out $i --keep $i.ind --recode --recode-INFO-all; vcftools --vcf $i.recode.vcf --out $i.ind --missing-site ; done
+
+```
+
+Compare distribution of missing data per locus per library and show the mean proportion of missing data
+
+```{r fig.height=15, fig.width=5, message=FALSE, warning=FALSE}
+
+libs <- yoy_sample_data$library %>% 
+  unique
+
+loci_missing <- list()
+
+for (i in libs){
+  file <- glue("lib{i}.ind.lmiss")    
+  loci_missing[[i]] <- read_delim(here("filter", "data", file), delim = "\t") %>% 
+  select(CHR, POS, F_MISS) %>%
+  mutate(library = i)
+}
+
+loci_missing <- tibble(do.call(rbind, loci_missing))
+
+# plot
+
+ggplot(loci_missing, aes(x = F_MISS)) +
+  geom_histogram(binwidth = 0.1, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data per Locus") +
+  facet_grid(library ~ .) +
+  theme_standard
+
+ggsave(here("filter", "data", "yoy_loci_missing_lib.png"))
+
+```
+
+Flag loci that were not called in >50% of individuals in a given library
+
+```{r}
+
+# Identify loci with high missing data in each library
+
+snps <- filter(loci_missing, F_MISS > 0.5) %>%
+  arrange(CHR, POS)
+
+remove_snps <- snps %>%
+  select(CHR, POS) %>%
+  unique()
+
+# Write contig/position to file
+
+write_delim(remove_snps, here("filter", "data", "yoy_f2d_remove.pos"))
+
+```
+
+Remove loci that were not consistently called across all libraries
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f2d.recode.vcf --out yoy_f2e --exclude-positions yoy_f2d_remove.pos --recode --recode-INFO-all
+
+vcftools --vcf yoy_f2e.recode.vcf --out yoy_f2e --missing-indv
+
+```
+
+Identify individuals with high missing data
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Determine cutoff
+
+imiss <- read_delim(here("filter", "data", "yoy_f2e.imiss"), delim = "\t") %>%
+  arrange(desc(F_MISS))
+
+ggplot(imiss, aes(x = F_MISS)) +
+  geom_histogram(binwidth = 0.05, color = "black", fill = "grey") +
+  geom_vline(xintercept = 0.4, color = "red", linetype = "dashed", size = 1) +
+  theme_standard
+
+remove_ind <- imiss %>%
+  filter(F_MISS > 0.4) %>%
+  select(INDV)
+
+#View(lq_ind)
+
+write_delim(remove_ind, here("filter", "data", "yoy_f2e_remove.ind"))
+
+```
+
+Remove flagged individuals to produce `yoy_f2.recode.vcf`. Use `yoy_f2e.recode.vcf` to produce stats because SNPs have not been filtered after removing the indiviudals with high missing data. 
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f2e.recode.vcf --out yoy_f2 --remove yoy_f2e_remove.ind --recode --recode-INFO-all
+vcftools --vcf yoy_f2.recode.vcf --out yoy_f2 --depth
+vcftools --vcf yoy_f2.recode.vcf --out yoy_f2 --site-mean-depth
+vcftools --vcf yoy_f2.recode.vcf --out yoy_f2 --missing-indv
+vcftools --vcf yoy_f2.recode.vcf --out yoy_f2 --missing-site
+vcftools --vcf yoy_f2.recode.vcf --out yoy_f2 --het
+
+```
+
+Analyze stats post-filtering
+
+```{r fig.height=5, fig.width=5,  message=FALSE, warning=FALSE}
+
+# Load stats files
+
+ind_stats_yoy_f2 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f2") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f2 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f2")
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f2, aes(x = MISS_yoy_f2)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "missing data per individual") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f2, aes(x = Fis_yoy_f2)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f2, aes(x = MEAN_DEPTH_yoy_f2)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Individual") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f2, aes(x = MEAN_DEPTH_yoy_f2, y = MISS_yoy_f2)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f2, aes(x = MISS_yoy_f2)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f2, aes(x = MEAN_DEPTH_yoy_f2)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f2, aes(x = MEAN_DEPTH_yoy_f2, y = MISS_yoy_f2)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f2, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+count(ind_stats_yoy_f2)
+
+count(loci_stats_yoy_f2)
+
+```
+
+#### Filter 3: Depth Among Libraries
+
+Determine mean depth and variance per locus per library
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+ls lib*.ind | cut -f1 -d"." | while read i; do vcftools --vcf yoy_f2.recode.vcf --out $i --keep $i.ind  --recode --recode-INFO-all; vcftools --vcf $i.recode.vcf --out $i.ind --site-mean-depth ; done
+
+
+```
+
+Compare distribution of depth coverage per locus per library. Identify loci that have low coverage in a given library (compared to other libraries)
+
+```{r fig.height=15, fig.width=5, message=FALSE, warning=FALSE}
+
+libs <- yoy_sample_data$library %>% 
+  unique
+
+loci_depth <- list()
+
+for (i in libs){
+  file <- glue("lib{i}.ind.ldepth.mean")    
+  loci_depth[[i]] <- read_delim(here("filter", "data", file), delim = "\t") %>% 
+  mutate(library = i)
+}
+
+loci_depth <- tibble(do.call(rbind, loci_depth))
+
+# plot
+
+ggplot(loci_depth, aes(x = MEAN_DEPTH)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH, na.rm = TRUE)), 
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = 20,
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth per Site") +
+  facet_grid(library ~ .) +
+  theme_standard
+
+ggsave(here("filter", "data", "yoy_loci_depth_lib.png"))
+
+```
+
+Identify loci with large variance in mean depth across libraries and/or individuals
+
+```{r}
+
+# Calculate mean depth weighted by library
+
+depth_comp <- loci_depth %>%
+  group_by(library) %>%
+  distinct(CHROM, .keep_all = TRUE) %>%
+  select(-POS) %>%
+  ungroup() %>%
+  group_by(CHROM) %>%
+  summarise(MEAN = mean(MEAN_DEPTH),
+  STD = sd(MEAN_DEPTH))
+
+# Mean depth across all individuals
+
+f2_ldepth_mean <- read_delim(here("filter", "data", "yoy_f2.ldepth.mean"), delim = "\t")  %>%
+  distinct(CHROM, .keep_all = TRUE) %>%
+  select(-POS) %>%
+  mutate(STD_DEPTH = sqrt(VAR_DEPTH))
+
+# Calculate coefficient of variation
+
+depth_summary <- left_join(depth_comp, f2_ldepth_mean, by = "CHROM") %>%
+  mutate(COEFF_VAR_LIB = STD/MEAN*100, COEFF_VAR_IND = STD_DEPTH/MEAN_DEPTH*100) %>% 
+  mutate(ratio = MEAN/MEAN_DEPTH)
+
+```
+
+Compare mean depth across all individuals to mean depth weighted by library, and standard deviation of mean depth across all individuals to sd of mean depth per library (linear regression (w/95% CI)).
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(depth_summary, aes(x = MEAN_DEPTH, y = MEAN)) +
+  geom_point(shape = 1) +
+  labs(x = "Mean Depth, All Inds", y = "Mean Depth Weighted By Library") +
+  geom_abline(slope = 1, linetype = "dashed", color = "red", size = 1) +
+  geom_vline(xintercept = 10, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = 500, color = "red", linetype = "dashed", size = 1) +
+  theme_standard
+
+ggplot(depth_summary, aes(x = STD_DEPTH, y = STD)) +
+  geom_point(shape = 1) +
+  geom_abline(slope = 1, linetype = "dashed", color = "red", size = 1) +
+  xlim(c(0, 400)) +
+  ylim(c(0, 400)) +
+  labs(x = "STD of Mean Depth, Inds", y = "STD of Mean Depth Per Library") +
+  theme_standard
+
+ggplot(depth_summary, aes(x = COEFF_VAR_IND)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(xintercept = quantile(depth_summary$COEFF_VAR_IND, 0.95, na.rm = TRUE), 
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Depth Coefficient of Variance, All Inds") +
+  theme_standard
+
+ggplot(depth_summary, aes(x = COEFF_VAR_LIB)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(xintercept = quantile(depth_summary$COEFF_VAR_LIB, 0.95, na.rm = TRUE), 
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Depth Coefficient of Variance Per Library") +
+  theme_standard
+
+# stats
+
+quantile(depth_summary$COEFF_VAR_IND, 0.95, na.rm = TRUE)
+
+quantile(depth_summary$COEFF_VAR_LIB, 0.95, na.rm = TRUE)
+
+```
+
+Flag loci that have high variation in coverage between individuals and between libraries
+
+```{r}
+
+contigs_var_lib <- depth_summary %>%
+  filter(COEFF_VAR_LIB > 100)
+
+# ind
+
+contigs_var_ind <- depth_summary %>%
+  filter(COEFF_VAR_IND > 140)
+
+# both (or)
+
+contigs_var <- depth_summary %>%
+  filter(COEFF_VAR_LIB > 100 | COEFF_VAR_IND > 140)
+
+snps_var <- filter(loci_depth, CHROM %in% contigs_var$CHROM) %>%
+  distinct(CHROM, POS)
+
+contigs_mean <- depth_summary %>%
+  filter(MEAN_DEPTH < 10 | MEAN_DEPTH > 500)
+
+snps_mean <- filter(loci_depth, CHROM %in% contigs_mean$CHROM) %>%
+  distinct(CHROM, POS)
+
+remove_snps <- bind_rows(snps_var, snps_mean) %>%
+  distinct(CHROM, POS)
+
+# Write contig/position to text file, use file with vcftools to remove positions from dataset
+
+write_delim(remove_snps, here("filter", "data", "yoy_f3_remove.pos"))
+
+```
+
+Remove SNPs with high variation in coverage
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f2.recode.vcf --out yoy_f3 --exclude-positions yoy_f3_remove.pos --recode --recode-INFO-all
+
+vcftools --vcf yoy_f3.recode.vcf --out yoy_f3 --depth
+vcftools --vcf yoy_f3.recode.vcf --out yoy_f3 --site-mean-depth
+vcftools --vcf yoy_f3.recode.vcf --out yoy_f3 --missing-indv
+vcftools --vcf yoy_f3.recode.vcf --out yoy_f3 --missing-site
+vcftools --vcf yoy_f3.recode.vcf --out yoy_f3 --het
+
+
+```
+
+Analyze stats post-filtering
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Load stats files
+
+ind_stats_yoy_f3 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f3") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f3 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f3")
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f3, aes(x = MISS_yoy_f3)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "missing data per individual") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f3, aes(x = Fis_yoy_f3)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f3, aes(x = MEAN_DEPTH_yoy_f3)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Individual") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f3, aes(x = MEAN_DEPTH_yoy_f3, y = MISS_yoy_f3)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f3, aes(x = MISS_yoy_f3)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f3, aes(x = MEAN_DEPTH_yoy_f3)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f3, aes(x = MEAN_DEPTH_yoy_f3, y = MISS_yoy_f3)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f3, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+count(ind_stats_yoy_f3)
+
+count(loci_stats_yoy_f3)
+
+```
+
+#### Filter 4: Minimum Depth and Missing Data by SNP I
+
+Remove loci with minimum mean depth across all individuals < 15 and genotype call rate of <75%
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f3.recode.vcf --out yoy_f4 --min-meanDP 15 --max-missing 0.75 --recode --recode-INFO-all
+
+# Query stats
+
+vcftools --vcf yoy_f4.recode.vcf --out yoy_f4 --depth
+vcftools --vcf yoy_f4.recode.vcf --out yoy_f4 --site-mean-depth
+vcftools --vcf yoy_f4.recode.vcf --out yoy_f4 --missing-indv
+vcftools --vcf yoy_f4.recode.vcf --out yoy_f4 --missing-site
+vcftools --vcf yoy_f4.recode.vcf --out yoy_f4 --het
+
+```
+
+Analyze stats post-filtering
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Load stats files
+
+ind_stats_yoy_f4 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f4") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f4 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f4")
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f4, aes(x = MISS_yoy_f4)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "missing data per individual") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f4, aes(x = Fis_yoy_f4)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f4, aes(x = MEAN_DEPTH_yoy_f4)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Individual") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f4, aes(x = MEAN_DEPTH_yoy_f4, y = MISS_yoy_f4)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f4, aes(x = MISS_yoy_f4)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f4, aes(x = MEAN_DEPTH_yoy_f4)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f4, aes(x = MEAN_DEPTH_yoy_f4, y = MISS_yoy_f4)) +
+  geom_point(shape = 1) +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f4, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_f4 %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_f4 %>%
+count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_f4) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_f4)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+count(ind_stats_yoy_f4)
+
+count(loci_stats_yoy_f4)
+
+```
+
+#### Filter 5: Allele Balance
+
+Allele balance (AB) at heterozygous sites: a number between 0 and 1 representing the ratio of reads showing the reference allele to all reads, considering only reads from individuals called as heterozygous
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+cut -f8 yoy_f4.recode.vcf | grep -oe "AB=[[:digit:]].[[:digit:]][[:digit:]][[:digit:]]" | sed -s 's/AB=//g' > yoy_f4.AB
+
+
+```
+
+Allele balance is the ratio of reads for reference allele to all reads, considering only reads from individuals called as heterozygous. Values range from 0 - 1; allele balance (for real loci) should be approx. 0.5
+
+Filter contigs SNPs with allele balance < 0.25 and > 0.75
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+allele_balance <- read_delim(here("filter", "data", "yoy_f4.AB"), delim = "\t", col_names = "ab")
+
+# plot
+
+ggplot(allele_balance, aes(x = ab)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(xintercept = 0.125, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 0.25, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 0.5, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 0.75, color = "red", linetype = "dashed") +
+  theme_standard
+
+ggsave(here("filter", "results", "yoy_allele_balance.png"))
+
+```
+
+Filter contigs with SNP calls with AB > 0.2, AB > 0.8; retain loci very close to 0 (retain loci that are fixed variants)
+
+Remove genotypes if the quality sum of the reference or alternate allele was 0
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcffilter -s -f "AB > 0.25 & AB < 0.75 | AB < 0.01 | AB > 0.99" -s -g "QR > 0 | QA > 0" yoy_f4.recode.vcf > yoy_f5.vcf 
+
+mawk '!/#/' yoy_f5.vcf | wc -l
+
+  
+```
+
+#### Filter 6: Mapping quality
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+  
+cut -f8 yoy_f5.vcf | grep -oe "MQM=[0-9]*" | sed -s 's/MQM=//g' > yoy_f6.MQM
+
+cut -f8 yoy_f5.vcf | grep -oe "MQMR=[0-9]*" | sed -s 's/MQMR=//g' > yoy_f6.MQMR
+
+
+```
+
+Remove loci based on ratio of mapping quality for reference and alternate allele, i.e. sites that have a high discrepancy between the mapping qualities of two alleles
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+mqm <- read_delim(here("filter", "data", "yoy_f6.MQM"), delim = "\t", col_names = "MQM")
+
+mqmr <- read_delim(here("filter", "data", "yoy_f6.MQMR"), delim = "\t", col_names = "MQMR")
+
+mapqual <- bind_cols(mqmr, mqm) %>%
+  mutate(ratio = MQM/MQMR)
+
+remove_loci <- mapqual %>%
+  filter(ratio < 0.25 | ratio > 1.75)
+
+ggplot(mapqual, aes(x = MQM, y = MQMR)) +
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1, size = 1, color = "red", linetype = "dashed") +
+  geom_abline(intercept = 0, slope = 1/0.25, size = 1, color = "darkblue", linetype = "dashed") +
+  geom_abline(intercept = 0, slope = 1/1.75, size = 1, color = "darkblue", linetype = "dashed") +
+  geom_point(data = remove_loci, aes(x = MQM, y = MQMR), color = "red") +
+  scale_x_continuous(limits = c(0, 100)) +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme_standard
+
+```
+
+Filter loci with mapping quality ratio < 0.25 and > 1.75
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+  
+vcffilter -s -f "MQM / MQMR > 0.25 & MQM / MQMR < 1.75" yoy_f5.vcf > yoy_f6.vcf
+
+mawk '!/#/' yoy_f6.vcf | wc -l
+
+
+```
+
+#### Filter 7: Strand balance
+
+SRF: Number of reference observations on the forward strand
+SAF: Number of alternate observations on the forward strand
+SRR: Number of reference observations on the reverse strand
+SAR: Number of alternate observations on the reverse strand
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data/
+  
+cut -f8 yoy_f6.vcf | grep -oe "SAF=[0-9]*" | sed -s 's/SAF=//g' > yoy_f6.SAF
+
+cut -f8 yoy_f6.vcf | grep -oe "SAR=[0-9]*" | sed -s 's/SAR=//g' > yoy_f6.SAR
+
+cut -f8 yoy_f6.vcf | grep -oe "SRF=[0-9]*" | sed -s 's/SRF=//g' > yoy_f6.SRF
+
+cut -f8 yoy_f6.vcf | grep -oe "SRR=[0-9]*" | sed -s 's/SRR=//g' > yoy_f6.SRR
+
+
+```
+
+Paired end reads should not overlap, and a SNP site should only be covered by either the forward or reverse read
+
+```{r message=FALSE, warning=FALSE,  fig.height=5, fig.width=5}
+
+SAF <- read_delim(here("filter", "data", "yoy_f6.SAF"), delim = "\t", col_names = "SAF")
+
+SAR <- read_delim(here("filter", "data", "yoy_f6.SAR"), delim = "\t", col_names = "SAR")
+
+strands <- bind_cols(SAF, SAR)
+
+SRF <- read_delim(here("filter", "data", "yoy_f6.SRF"), delim = "\t", col_names = "SRF")
+
+SRR <- read_delim(here("filter", "data", "yoy_f6.SRR"), delim = "\t", col_names = "SRR")
+
+strands <- bind_cols(strands, SRR) %>%
+  mutate(ratioA = SAF/SAR, ratioR = SRF/SRR)
+
+# plot
+
+ggplot(strands, aes(x = SAF, y = SAR)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 0.1, color = "red", linetype = "dashed", size = 1) +
+  geom_abline(intercept = 0, slope = 100, color = "red", linetype = "dashed", size = 1) +
+  theme_standard
+
+```
+
+Remove SNP sites that have > 100x more forward alternate reads than reverse alternate reads and > 100x more forward reverse reads than reverse alternate reads
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data/
+  
+vcffilter -f "SAF / SAR > 100 & SRF / SRR > 100 | SAR / SAF > 100 & SRR / SRF > 100" -s yoy_f6.vcf > yoy_f7.vcf
+
+mawk '!/#/' yoy_f7.vcf | wc -l
+
+
+```
+
+#### Filter 8: Properly Paired Status
+
+PAIRED: Proportion of observed alternate alleles which are supported by properly paired read fragments
+PAIREDR: Proportion of observed reference alleles which are supported by properly paired read fragments
+
+Identify loci with only unpaired reads mapping to them - an artifact introduced due to de novo reference assembly
+
+Compare number of paired reads mapping the reference and the alternate alleles to identify discrepancy in the paired status for reads supporting reference and alternate alleles
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data/
+  
+vcffilter -f "PAIRED > 0.05 & PAIREDR > 0.05 & PAIREDR / PAIRED < 1.75 & PAIREDR / PAIRED > 0.25 | PAIRED < 0.05 & PAIREDR < 0.05" -s yoy_f7.vcf > yoy_f8.vcf
+
+mawk '!/#/' yoy_f8.vcf | wc -l
+
+```
+
+Number of SNPs remaining: 9412
+
+#### Filter 9: Maximum Depth & Quality
+
+Identify distribution of depth (based on original data set) to identify loci with excess coverage
+
+Create file with the original site depth and quality score for each site
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data/
+  
+# Site depth
+  
+cut -f8 yoy_f8.vcf | grep -oe "DP=[0-9]*" | sed -s 's/DP=//g' > yoy_f8.depth
+
+# Quality score
+
+mawk '!/#/' yoy_f8.vcf | cut -f1,2,6 > yoy_f8.loci.qual
+
+```
+
+Calculate average depth and standard deviation
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Depth
+
+depth <- read_delim(here("filter", "data", "yoy_f8.depth"), delim = "\t", col_names = "depth")
+
+# Quality score
+
+qual <- read_delim(here("filter", "data", "yoy_f8.loci.qual"), delim = "\t", col_names = c("locus", "pos", "qual"))
+
+# Mean depth
+
+mean_depth <- mean(depth$depth)
+
+# Standard deviation
+
+std <- sd(depth$depth)
+
+# Calculate cutoff
+
+cutoff <- sum(mean_depth + (1*std))
+
+# Identify SNPs with excess depth (i.e. > mean depth + 1 standard deviation and quality score < 2x the depth at that site)
+
+df <- bind_cols(qual, depth) %>%
+  mutate(qualcutoff = 2*depth)
+
+remove_snps <- df %>%
+  filter(depth > cutoff) %>%
+  filter(qual < 2*depth)
+
+# Plot
+
+ggplot(df, aes(x = depth, y = qual)) +
+  geom_point() +
+  geom_point(data = remove_snps, aes(x = depth, y = qual), color = "red") +
+  geom_line(data = df, aes(x = depth, y = qualcutoff), color = "red",  linetype = "dashed", size = 1) +
+  geom_vline(xintercept = cutoff, color = "red", linetype = "dashed", size = 1) +
+  theme_standard
+
+remove_snps <- remove_snps %>%
+  select(locus, pos)
+
+write_delim(remove_snps, here("filter", "data", "yoy_f8_remove.pos"))
+
+```
+
+Mean depth per locus (across all indivuals) is `r mean_depth` and the standard deviation is `r std` 
+
+Filter SNP site with depth > mean depth + 1 standard deviation = `r sum(mean_depth + 2*std)` and that have quality scores < 2x the depth at that site and output depth per site
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f8.vcf --exclude-positions yoy_f8_remove.pos --recode --recode-INFO-all --out yoy_f8a
+
+vcftools --vcf yoy_f8a.recode.vcf --out yoy_f8a --site-mean-depth
+
+
+```
+
+Compare the distribution of mean depth per site averaged across individuals to determine cut-off value of sites with excessively high depth indicative of paralogs/multicopy loci
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Calculate mean depth per site
+
+f8a_ldepth_mean <- read_delim(here("filter", "data", "yoy_f8a.ldepth.mean"), delim = "\t")
+
+ggplot(f8a_ldepth_mean, aes(x = MEAN_DEPTH)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = quantile(MEAN_DEPTH, .95)), color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Site") +
+  theme_standard
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+```
+
+Cut-off for maximum mean read depth = 150
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f8a.recode.vcf --out yoy_f9 --max-meanDP 150 --recode --recode-INFO-all 
+
+vcftools --vcf yoy_f9.recode.vcf --out yoy_f9 --depth
+vcftools --vcf yoy_f9.recode.vcf --out yoy_f9 --site-mean-depth
+vcftools --vcf yoy_f9.recode.vcf --out yoy_f9 --missing-indv
+vcftools --vcf yoy_f9.recode.vcf --out yoy_f9 --missing-site
+vcftools --vcf yoy_f9.recode.vcf --out yoy_f9 --het
+
+
+```
+
+Analyze stats post-filtering
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Load stats files
+
+ind_stats_yoy_f9 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f9") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f9 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f9")
+
+# count
+
+count(ind_stats_yoy_f9)
+
+count(distinct(loci_stats_yoy_f9, CHR))
+
+count(loci_stats_yoy_f9)
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f9, aes(x = MISS_yoy_f9)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.3),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data Per Ind") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f9, aes(x = MEAN_DEPTH_yoy_f9)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Ind") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f9, aes(x = MEAN_DEPTH_yoy_f9, y = MISS_yoy_f9)) +
+  geom_point() +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Ind", y = "% Missing Data") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f9, aes(x = Fis_yoy_f9)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f9, aes(x = MISS_yoy_f9)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f9, aes(x = MEAN_DEPTH_yoy_f9)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f9, aes(x = MEAN_DEPTH_yoy_f9, y = MISS_yoy_f9)) +
+  geom_point() +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f9, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_f9 %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_f9 %>%
+  count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_f9) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_f9)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+
+```
+
+#### Filter 10: Minimum Depth and Missing Data by SNP II
+
+Assess individuals in terms of low coverage, high missing data, and frequency burden (i.e. distribution of the number of variants within each individual of a specific frequency)
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f9.recode.vcf --out yoy_f10 --min-meanDP 20 --max-missing 0.9 --recode --recode-INFO-all
+
+vcftools --vcf yoy_f10.recode.vcf --out yoy_f10 --depth
+vcftools --vcf yoy_f10.recode.vcf --out yoy_f10 --site-mean-depth
+vcftools --vcf yoy_f10.recode.vcf --out yoy_f10 --missing-indv
+vcftools --vcf yoy_f10.recode.vcf --out yoy_f10 --missing-site
+vcftools --vcf yoy_f10.recode.vcf --out yoy_f10 --het
+vcftools --vcf yoy_f10.recode.vcf --out yoy_f10 --hardy
+
+```
+
+Analyze stats post-filtering
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Load stats files
+
+ind_stats_yoy_f10 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f10") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f10 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f10")
+
+# count
+
+count(ind_stats_yoy_f10)
+
+count(distinct(loci_stats_yoy_f10, CHR))
+
+count(loci_stats_yoy_f10)
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f10, aes(x = MISS_yoy_f10)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.3),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data Per Ind") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f10, aes(x = MEAN_DEPTH_yoy_f10)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Ind") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f10, aes(x = MEAN_DEPTH_yoy_f10, y = MISS_yoy_f10)) +
+  geom_point() +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Ind", y = "% Missing Data") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f10, aes(x = Fis_yoy_f10)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f10, aes(x = MISS_yoy_f10)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f10, aes(x = MEAN_DEPTH_yoy_f10)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f10, aes(x = MEAN_DEPTH_yoy_f10, y = MISS_yoy_f10)) +
+  geom_point() +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_f10, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_f10 %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_f10 %>%
+  count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_f10) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_f10)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+```
+
+Plot Fis by library
+
+```{r fig.height=10, fig.width=5,  message=FALSE, warning=FALSE}
+
+ggplot(ind_stats_yoy_f10, aes(x = Fis_yoy_f10)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f10, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  facet_grid(library ~ .) +
+  theme_standard
+
+fis_lib_f10 <- ind_stats_yoy_f10 %>%
+  select(c(hiseq_id, library, Fis_yoy_f10)) %>%
+  spread(key = library, value = Fis_yoy_f10)
+
+```
+
+#### Filter 11: HWE & Excess Heterozygosity
+  
+Identify SNPs with > 0.5 heterozygosity and those violating HWE
+
+```{r}
+
+# Calculate observed heterozygosity
+
+hwe <- read_delim(here("filter", "data", "yoy_f10.hwe"), delim = "\t")%>%
+  select(-ChiSq_HWE) %>%
+  separate("OBS(HOM1/HET/HOM2)", into = c("obs_hom1", "obs_het", "obs_hom2"), 
+           sep = "/", convert = TRUE) %>%
+  separate("E(HOM1/HET/HOM2)", into = c("exp_hom1", "exp_het", "exp_hom2"), 
+           sep = "/", convert = TRUE) %>% 
+  mutate(Ho = obs_het/(obs_hom1 + obs_hom2 + obs_het),
+                He = exp_het/(exp_hom1 + exp_hom2 + exp_het)) %>%
+  select(CHR, POS, obs_hom1, exp_hom1, obs_hom2, exp_hom2, P_HET_DEFICIT, obs_het, exp_het, P_HET_EXCESS, Ho, He, P_HWE) %>%
+  mutate(p_adj = p.adjust(P_HET_EXCESS), method = "fdr")
+
+```
+
+Distribution of observed heterozygosity and p values.
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Observed Heterozygosity
+
+ggplot(hwe, aes(x = Ho)) + 
+  geom_histogram(binwidth = 0.05, color = "black", fill = "grey") +
+  geom_vline(xintercept = 0.5, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Observed Heterozygosity") +
+  theme_standard
+
+# p value
+
+ggplot(hwe, aes(x = p_adj)) + 
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(xintercept = 0.05, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "BH Adjusted p Value") +
+  theme_standard
+
+```
+
+Remove loci with corrected p values < 0.05
+
+```{r message = FALSE}
+
+hwe_fail <- hwe %>%
+  filter(Ho > 0.5) %>%
+  filter(p_adj < 0.05)
+
+hwe_pass <- anti_join(hwe, hwe_fail)
+
+contigs <- hwe %>%
+  filter(CHR %in% hwe_fail$CHR) %>%
+  select(CHR) %>%
+  unique()
+
+# Identify all SNPs on contigs
+
+remove_snps <- hwe %>%
+  filter(CHR %in% contigs$CHR) %>%
+  select(CHR, POS)
+
+count(remove_snps)
+
+# Write contig/position to text file, use file with vcftools to remove positions from dataset
+
+write_delim(remove_snps, here("filter", "data", "yoy_f10_remove.pos"))
+
+```
+
+Remove SNPs with excess heterozygosity and contigs with more than one SNP with excess heterozygosity
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f10.recode.vcf --out yoy_f11 --exclude-positions yoy_f10_remove.pos --recode --recode-INFO-all
+
+vcftools --vcf yoy_f11.recode.vcf --out yoy_f11 --depth
+vcftools --vcf yoy_f11.recode.vcf --out yoy_f11 --site-mean-depth
+vcftools --vcf yoy_f11.recode.vcf --out yoy_f11 --missing-indv
+vcftools --vcf yoy_f11.recode.vcf --out yoy_f11 --missing-site
+vcftools --vcf yoy_f11.recode.vcf --out yoy_f11 --het
+
+```
+
+**7568 SNPs in 525 individuals**
+  
+Visualize stats
+
+```{r eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Load stats files
+
+ind_stats_yoy_f11 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f11") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f11 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f11")
+
+# count
+
+count(ind_stats_yoy_f11)
+
+count(distinct(loci_stats_yoy_f11, CHR))
+
+count(loci_stats_yoy_f11)
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f11, aes(x = MISS_yoy_f11)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.3),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data Per Ind") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f11, aes(x = MEAN_DEPTH_yoy_f11)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Ind") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f11, aes(x = MEAN_DEPTH_yoy_f11, y = MISS_yoy_f11)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Ind", y = "% Missing Data") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f11, aes(x = Fis_yoy_f11)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(Fis_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f11, aes(x = MISS_yoy_f11)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f11, aes(x = MEAN_DEPTH_yoy_f11)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f11, aes(x = MEAN_DEPTH_yoy_f11, y = MISS_yoy_f11)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f11, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_f11 %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_f11 %>%
+  count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_f11) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_f11)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+```
+
+#### Filter 12: Missing Data by Site
+
+First, remove individuals with high missing data and high coverage that are from library 2
+
+```{r, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Plot mean depth per individual vs missing data
+
+ggplot(ind_stats_yoy_f11, aes(x = MEAN_DEPTH_yoy_f11, y = MISS_yoy_f11, color = library)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f11, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 25),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f11, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.15),
+             color = "red", linetype = "dashed", size = 1) +
+  scale_color_manual(values = lib_col) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard + 
+  guides(color=guide_legend(nrow=2, byrow=TRUE))
+
+# Remove individuals
+
+f11_ind_depth_missing <- ind_stats_yoy_f11 %>%
+  filter(MISS_yoy_f11 > 0.15) %>%
+  filter(MEAN_DEPTH_yoy_f11 > 20) %>%
+  left_join(yoy_sample_data) %>% 
+  filter(library == "02") %>% 
+  select(hiseq_id)
+
+#View(ind_depth_missing)
+
+write_delim(f11_ind_depth_missing, here("filter", "data", "remove.ind"))
+
+```
+
+Remove flagged individuals and filter by sites
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f11.recode.vcf --out yoy_f11a --remove remove.ind --recode --recode-INFO-all
+
+# sites ending in B (i.e., Bay)
+
+ls *B.ind | cut -f1 -d"." | while read i; do vcftools --vcf yoy_f11a.recode.vcf --out $i --keep $i.ind  --recode --recode-INFO-all; vcftools --vcf $i.recode.vcf --out $i --missing-site ; done
+
+# sites ending in S (i.e., Sound)
+
+ls *S.ind | cut -f1 -d"." | while read i; do vcftools --vcf yoy_f11a.recode.vcf --out $i --keep $i.ind  --recode --recode-INFO-all; vcftools --vcf $i.recode.vcf --out $i --missing-site ; done
+
+```
+
+Compare missing data per sample site
+
+```{r fig.height=15, fig.width=5, message=FALSE, warning=FALSE}
+
+sites <- yoy_sample_data$site_shrt %>% 
+  unique
+
+loci_missing <- list()
+
+for (i in sites){
+  file <- glue("{i}.lmiss")    
+  loci_missing[[i]] <- read_delim(here("filter", "data", file), delim = "\t") %>% 
+  mutate(site = i)
+}
+
+loci_missing_df <- tibble(do.call(rbind, loci_missing))
+
+# plot
+
+ggplot(loci_missing_df, aes(x = F_MISS)) +
+  geom_histogram(binwidth = 0.025, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = quantile(loci_missing_df$F_MISS, .9)),
+             color = "darkblue", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.15),
+             color = "red", linetype = "dotted", size = 1) +
+  labs(x = "Missing Data per Locus") +
+  facet_grid(site ~ .) +
+  theme_standard
+
+```
+
+Identify loci with high missing data in each site
+
+```{r}
+
+# Identify loci with high missing data in each site
+
+remove_snps <- filter(loci_missing_df, F_MISS > 0.2)
+
+count(remove_snps, site)
+
+remove_snps <- remove_snps %>%
+  select(CHR, POS) %>%
+  group_by(CHR, POS) %>%
+  count()
+
+# Write contig/position to text file, use file with vcftools to remove positions from dataset
+
+write_delim(remove_snps, here("filter", "data", "yoy_f12_remove.pos"))
+
+```
+
+Remove loci from data set
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f11a.recode.vcf --out yoy_f12 --exclude-positions yoy_f12_remove.pos --recode --recode-INFO-all
+
+vcftools --vcf yoy_f12.recode.vcf --out yoy_f12 --depth
+vcftools --vcf yoy_f12.recode.vcf --out yoy_f12 --site-mean-depth
+vcftools --vcf yoy_f12.recode.vcf --out yoy_f12 --missing-indv
+vcftools --vcf yoy_f12.recode.vcf --out yoy_f12 --missing-site
+vcftools --vcf yoy_f12.recode.vcf --out yoy_f12 --het
+vcftools --vcf yoy_f12.recode.vcf --out yoy_f12 --singletons
+
+```
+
+Visualize stats
+
+```{r eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Load stats files
+
+ind_stats_yoy_f12 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f12") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f12 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f12")
+
+# count
+
+count(ind_stats_yoy_f12)
+
+count(distinct(loci_stats_yoy_f12, CHR))
+
+count(loci_stats_yoy_f12)
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f12, aes(x = MISS_yoy_f12)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.3),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data Per Ind") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f12, aes(x = MEAN_DEPTH_yoy_f12)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Ind") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f12, aes(x = MEAN_DEPTH_yoy_f12, y = MISS_yoy_f12)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.5),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Ind", y = "% Missing Data") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f12, aes(x = Fis_yoy_f12)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(Fis_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f12, aes(x = MISS_yoy_f12)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f12, aes(x = MEAN_DEPTH_yoy_f12)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f12, aes(x = MEAN_DEPTH_yoy_f12, y = MISS_yoy_f12)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f12, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_f12 %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_f12 %>%
+  count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_f12) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_f12)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+```
+
+#### Filter 13: Missing Data by Individual
+
+Identify individuals with high missing data
+
+```{r, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Determine cutoff
+
+imiss <- read_delim(here("filter", "data", "yoy_f12.imiss"), delim = "\t") %>%
+  arrange(desc(F_MISS)) %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+ggplot(imiss, aes(x = F_MISS)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(xintercept = 0.2, color = "red", linetype = "dashed", size = 1) +
+  theme_standard
+
+ind_remove <- imiss %>%
+  filter(F_MISS > 0.2) %>%
+  select(hiseq_id)
+
+write_delim(ind_remove, here("filter", "data", "remove.ind"))
+
+```
+
+Remove flagged individuals
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f12.recode.vcf --out yoy_f12a --remove remove.ind --recode --recode-INFO-all
+
+vcftools --vcf yoy_f12a.recode.vcf --out yoy_f13 --min-meanDP 15 --max-missing 0.9 --recode --recode-INFO-all
+
+vcftools --vcf yoy_f13.recode.vcf --out yoy_f13 --depth
+vcftools --vcf yoy_f13.recode.vcf --out yoy_f13 --site-mean-depth
+vcftools --vcf yoy_f13.recode.vcf --out yoy_f13 --missing-indv
+vcftools --vcf yoy_f13.recode.vcf --out yoy_f13 --missing-site
+vcftools --vcf yoy_f13.recode.vcf --out yoy_f13 --het
+
+```
+
+Analyze stats post-filtering
+
+```{r eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Load stats files
+
+ind_stats_yoy_f13 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f13") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)  #%>% 
+ # filter(site_shrt != "FBC" & site_shrt != "LLM")
+
+loci_stats_yoy_f13 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f13")
+
+# count
+
+count(ind_stats_yoy_f13)
+
+count(distinct(loci_stats_yoy_f13, CHR))
+
+count(loci_stats_yoy_f13)
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f13, aes(x = MISS_yoy_f13)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.2),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data Per Individual") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f13, aes(x = MEAN_DEPTH_yoy_f13)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Individual") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f13, aes(x = MEAN_DEPTH_yoy_f13, y = MISS_yoy_f13)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.2),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f13, aes(x = Fis_yoy_f13)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(Fis_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f13, aes(x = MISS_yoy_f13)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f13, aes(x = MEAN_DEPTH_yoy_f13)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f13, aes(x = MEAN_DEPTH_yoy_f13, y = MISS_yoy_f13)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f13, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_f13 %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_f13 %>%
+  count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_f13) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_f13)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+```
+
+#### Filter 14: Remove Individuals With Low Fis
+
+Identify individuals with low Fis and remove. Low Fis (high heterozygosity) is indicative of contamination, although some individuals may be more outbred than others and thus may be informative.
+
+```{r Fis, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+is_outlier <- function(x) {
+    return(x < quantile(x, 0.25) - 1.5 * IQR(x) | x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+
+# Detect Fis outliers
+
+is_outlier <- function(x) {
+    return(x < quantile(ind_stats_yoy_f13$Fis_yoy_f13, 0.25) - 1.5 * IQR(ind_stats_yoy_f13$Fis_yoy_f13) | ind_stats_yoy_f13$Fis_yoy_f13 > quantile(ind_stats_yoy_f13$Fis_yoy_f13, 0.75) + 1.5 * IQR(ind_stats_yoy_f13$Fis_yoy_f13))
+}
+
+
+fis_outliers <- tibble(is_outlier(ind_stats_yoy_f13$Fis_yoy_f13)) %>%
+  rename(fis_outlier = `is_outlier(ind_stats_yoy_f13$Fis_yoy_f13)`) %>%
+  cbind(ind_stats_yoy_f13$hiseq_id) %>%
+  rename(hiseq_id = `ind_stats_yoy_f13$hiseq_id`) %>%
+  left_join(ind_stats_yoy_f13, ., by = "hiseq_id") %>%
+  filter(fis_outlier == "TRUE") %>%
+  arrange(Fis_yoy_f13) %>% 
+  relocate(fis_outlier, .after = Fis_yoy_f13)
+
+# boxplot
+
+ggplot(ind_stats_yoy_f13, aes(y=Fis_yoy_f13)) + 
+  geom_boxplot(notch = TRUE) + 
+  geom_boxplot(outlier.colour = "red") +
+  geom_hline(aes(yintercept = -0.25),
+             color = "darkblue", linetype = "dotted", size = 0.5) +
+  ylim(-1, 1) +
+  theme_standard
+
+# histogram
+
+ggplot(ind_stats_yoy_f13, aes(x = Fis_yoy_f13)) +
+  geom_histogram(binwidth = 0.05, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = quantile(ind_stats_yoy_f13$Fis_yoy_f13, 0.25) - 1.5 * IQR(ind_stats_yoy_f13$Fis_yoy_f13)),
+             color = "red", linetype = "dotted", size = 0.5) +
+  geom_vline(aes(xintercept = -0.25),
+             color = "darkblue", linetype = "dotted", size = 0.5) +
+  geom_vline(aes(xintercept = 0),
+             color = "black", linetype = "solid", size = 1) +
+  labs(x = "Fis Per Individual") +
+  xlim(-1, 1) +
+  theme_standard
+
+# subjectively revise fis_outliers
+
+ind_remove <- ind_stats_yoy_f13 %>% 
+  filter(Fis_yoy_f13 < -0.25)
+
+# Write to file
+
+write_delim(fis_outliers, here("filter", "data", "remove_fis.ind"))
+
+```
+
+#### Filter 15: Minimum Depth and Missing Data by SNP III
+
+Remove loci with minimum mean depth across all individuals >15 and genotype call rate of <95%
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f13.recode.vcf --out yoy_f14 --remove remove_fis.ind --recode --recode-INFO-all
+
+vcftools --vcf yoy_f14.recode.vcf --out yoy_f15 --min-meanDP 15 --max-missing 0.9 --recode --recode-INFO-all
+
+# Query stats
+
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15 --depth
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15 --site-mean-depth
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15 --missing-indv
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15 --missing-site
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15 --het
+
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15_mac3 --mac 3
+
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15  --freq2 --max-alleles 2
+
+```
+
+Analyze stats post-filtering
+
+```{r eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+
+# Load stats files
+
+ind_stats_yoy_f15 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f15") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)  %>% 
+  filter(site_shrt != "FBC" & site_shrt != "LLM")
+
+loci_stats_yoy_f15 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f15")
+
+# count
+
+count(ind_stats_yoy_f15)
+
+count(distinct(loci_stats_yoy_f15, CHR))
+
+count(loci_stats_yoy_f15)
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_f15, aes(x = MISS_yoy_f15)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.2),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data Per Individual") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_f15, aes(x = MEAN_DEPTH_yoy_f15)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Individual") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_f15, aes(x = MEAN_DEPTH_yoy_f15, y = MISS_yoy_f15)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.2),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_f15, aes(x = Fis_yoy_f15)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(Fis_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_f15, aes(x = MISS_yoy_f15)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MISS_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_f15, aes(x = MEAN_DEPTH_yoy_f15)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_f15, aes(x = MEAN_DEPTH_yoy_f15, y = MISS_yoy_f15)) +
+  geom_point() +
+  geom_vline(aes(xintercept = base::mean(MEAN_DEPTH_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = base::mean(MISS_yoy_f15, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_f15 %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_f15 %>%
+  count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_f15) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_f15)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+```
+
+Plot Fis by library
+
+```{r fig.height=10, fig.width=5,  message=FALSE, warning=FALSE}
+
+ggplot(ind_stats_yoy_f15, aes(x = Fis_yoy_f15)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_f15, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  facet_grid(library ~ .) +
+  theme_standard
+
+fis_lib_filt <- ind_stats_yoy_f15 %>%
+  select(c(hiseq_id, library, Fis_yoy_f15)) %>%
+  spread(key = library, value = Fis_yoy_f15)
+
+
+```
+
+### Haplotype
+
+Prep files for haplotyping
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcfsamplenames yoy_f15.recode.vcf > yoy_hap.ind
+
+```
+
+Use `yoy_hap.ind` to create `popmap` as a tab-separated file of individuals and their population designation, with one individual per line
+
+This file is needed to write the genepop file, if not provided the script will run through the process but not write a genepop file and place into same folder `rad_haplotyper.pl` will be run from
+
+```{r}
+
+# import sample data
+
+yoy_sample_data <- read_csv(here("filter", "data", "yoy_sample_data.csv"))
+
+popmap <- read_delim(here("filter", "data", "yoy_hap.ind"), delim = "\t", col_names = "hiseq_id") %>%
+  left_join(yoy_sample_data) %>%
+  select(c(hiseq_id, site_shrt))
+
+write_delim(popmap, here("filter", "data", "popmap"))
+
+count(popmap, site_shrt) %>%
+  arrange(desc(n))
+
+```
+
+Haplotype
+  
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+rad_haplotyper.pl -v yoy_f15.recode.vcf -r reference.fasta -x 30 -z 3 -m 0.9 -g yoy.gen -p popmap -o yoy_hap.vcf
+
+```
+
+Compare the number of loci filtered due to excess missing data or suspected paralogs to those that passed
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# import sample data
+
+yoy_sample_data <- read_csv(here("filter", "data", "yoy_sample_data.csv"))
+
+# Import stats files generated by haplotyper
+
+hap_stats <- read_delim(here("filter", "data", "stats.out"), skip = 1, delim = "\t") %>% 
+  rename(Low_Cov_Geno_Err = "Low_Cov/Geno_Err") %>% 
+  rename(CHR = Locus) %>% 
+  mutate_at("Prop_Haplotyped", as.numeric) %>% 
+  mutate_at(c("Sites", "Haplotypes", "Inds_Haplotyped", "Total_Inds", "Poss_Paralog", "Low_Cov_Geno_Err", "Miss_Geno"), as.integer)
+
+# View comparison of filtered vs. passed loci
+
+ggplot(hap_stats, aes(x = Status, stat = "identity")) +
+    geom_bar(color = "black", fill = "grey") +
+    labs(x = "Filter Status", y = "Number of Loci") +
+    theme_standard
+
+# ind stats
+
+ind_hap_stats <- read_delim(here("filter", "data", "ind_stats.out"), delim = "\t") %>%
+  rename("hiseq_id" = Ind) %>%
+  left_join(., yoy_sample_data) %>% 
+  rename(Low_Coverage_Errors = "Low_Coverage/Errors")
+
+# Remove inds that failed
+
+ind_hap_filt <- filter(ind_hap_stats, Prop_Success < 0.8)
+
+write_delim(ind_hap_filt, here("filter", "data", "hap_fail.ind"))
+
+```
+
+Remove filtered loci from data set
+
+```{r}
+
+count(hap_stats, Status == "FILTERED")
+
+filt_hap_stats <- hap_stats %>%
+    filter(Status == "PASSED") %>%
+    select(-Comment, -Status)
+
+```
+
+`r nrow(filt_hap_stats)` loci passed haplotyping process
+
+```{r fig.height=6, fig.width=9, message=FALSE, warning=FALSE}
+
+tidy_loci <- filt_hap_stats %>%
+  select(-Total_Inds, -Inds_Haplotyped) %>%
+  gather("STAT", "LOCI", 2:7)
+  
+# plots
+
+ggplot(tidy_loci, aes(x = LOCI, stat = "bin")) +
+  geom_histogram(color = "black", fill = "grey") +
+  facet_wrap(~STAT, scales = "free") +
+  labs(x = "") +
+  theme_classic()
+
+```
+
+Data set contains `r nrow(ind_hap_stats)` individuals
+
+```{r fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+
+tidy_ind <- ind_hap_stats %>%
+  select(-Total_Loci, -Total_Failed) %>%
+  gather("STAT", "LOCI", 2:5)
+  
+# plots
+
+ggplot(tidy_ind, aes(x = LOCI, stat = "bin")) +
+  geom_histogram(color = "black", fill = "grey") +
+  facet_wrap(~STAT, scales = "free") +
+  labs(x = "stat") +
+  theme_classic()
+  
+```
+
+Identify threshold values to filter data set: proportion of individuals haplotyped
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(filt_hap_stats, aes(x = Prop_Haplotyped)) +
+  geom_histogram(binwidth = 0.05, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Prop_Haplotyped, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.8),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Proportion of Individuals Haplotyped") +
+  theme_standard
+
+```
+
+Flag loci successfully haplotyped in < 90% of individuals.
+
+```{r message=FALSE, warning=FALSE}
+
+# Number of loci called in >80% individuals
+
+count(filt_hap_stats, Prop_Haplotyped < 0.9)
+
+# Create vector of loci to remove (choose cut-off)
+
+prop_haplotyped <- hap_stats %>%
+    filter(Prop_Haplotyped < 0.9)
+
+prop_haplotyped <- prop_haplotyped$CHR
+
+```
+
+`r length(prop_haplotyped)` loci were flagged as genotype call rate <0.9
+
+#### Paralogs by Locus
+  
+Loci are flagged as possible paralogs for an individual when more than the expected number of haplotypes based on the SNP genotype call (homozygote, heterozygote) are detected
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(filt_hap_stats, aes(x = Poss_Paralog)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Poss_Paralog, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (nrow(ind_hap_stats)*0.01)),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Putative Paralogs per Locus") +
+  theme_standard
+
+nrow(ind_hap_stats)*0.01
+
+```
+
+Flag loci that are potential paralogs in > 1% of total number of individuals
+
+```{r}
+
+# Number of loci with Poss_Paralogs
+
+count(filt_hap_stats, Poss_Paralog > nrow(ind_hap_stats)*0.01)
+
+# Create vector of loci to remove (choose cut-off)
+
+poss_paralog <- filt_hap_stats %>%
+  filter(Poss_Paralog > nrow(ind_hap_stats)*0.01)
+
+poss_paralog <- poss_paralog$CHR
+
+```
+
+`r length(poss_paralog)` loci were flagged as possible paralogs
+
+#### Number of SNPs and Haplotypes by Locus
+
+Each locus varies in the number of SNPs detected which determines the number of haplotypes expected in that population
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(filt_hap_stats, aes(x = Sites)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Sites, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Number of SNPs per Contig") +
+  theme_standard
+
+```
+
+filter loci based on number of SNPs contained on that locus could bias the data set as loci with high recombination may be removed.
+
+On the other hand, assuming an approximate length of 250 bp loci with more than `r 250*0.1` SNPs would mean that 10% of bases are polymorphisms
+
+Notice that with higher number of SNP sites, loci also more probable to have been flagged as possible paralogs in multiple individuals
+
+```{r}
+
+count(filt_hap_stats, Sites > 25)
+
+excess_SNPs <- filt_hap_stats %>%
+    filter(Sites > 25)
+  
+excess_SNPs <- excess_SNPs$CHR
+
+```
+
+Assuming that mutation is the only mechanism resulting in new haplotypes, the maximum expected number of haplotypes per locus is number of SNPs + 1. 
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(filt_hap_stats, aes(x = Haplotypes)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Haplotypes, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = quantile(Haplotypes, .99)),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Haplotypes per Locus", y = "Loci") +
+  theme_standard
+
+temp <- filt_hap_stats %>%
+  select(CHR, Sites, Haplotypes, Prop_Haplotyped, Low_Cov_Geno_Err, Poss_Paralog) %>%
+  mutate(exp_sites = Sites + 1) %>%
+  mutate(xtra = Haplotypes - Sites)
+
+ggplot(temp, aes(x = Sites, y = Poss_Paralog)) +
+  geom_point() +
+  geom_hline(yintercept = 5, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = 15, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "SNPs per Locus", y = "Possible Paralogs") +
+  theme_standard
+
+ggplot(temp, aes(x = Sites, y = xtra)) +
+  geom_point() +
+  geom_hline(yintercept = 10, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = 15, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "SNPs per Locus", y = "Extra Haplotypes") +
+  theme_standard
+
+ggplot(temp, aes(x = xtra, y = Prop_Haplotyped)) +
+  geom_point(size = 1) +
+  geom_hline(yintercept = 0.9, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = 10, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Extra Haplotypes", y = "Proportion of Individuals Haplotyped") +
+  theme_standard
+
+ggplot(temp, aes(x = xtra, y = Low_Cov_Geno_Err)) +
+  geom_point(size = 1) +
+  geom_hline(yintercept = 9, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = 10, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Extra Haplotypes", y = "Putative Genotyping Error") +
+  theme_standard
+
+ggplot(temp, aes(x = xtra, y = Poss_Paralog)) +
+  geom_point(size = 1) +
+  geom_hline(yintercept = 9, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = 10, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Extra Haplotypes", y = "Putative Paralogs") +
+  theme_standard
+
+```
+
+Again, removing loci with unexpectedly high numbers of haplotypes may bias the data set, as loci with e.g. high recombination may be removed from the data set
+
+```{r}
+
+count(temp, xtra >= 10)
+
+# Create vector of loci to remove
+
+hap_n <- filter(temp, xtra >= 10)
+
+hap_n <- hap_n$CHR
+
+```
+
+`r length(hap_n)` loci were flagged for excessive number of haplotypes compared to the number of SNPs at that locus
+
+#### Low Coverage and Genotyping Error by Locus
+
+After combining SNPs on the same contig during the haplotyping process, it is possible to observe fewer than the expected number of haplotypes based on the genotype call (heterozygote/homozygote)
+
+When this occurs, that genotype is coded as missing. For each locus the number of individuals for which is it flagged as a potential genotyping error or suffering from null alleles due to low coverage detected for a given locus is recorded.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(filt_hap_stats, aes(x = Low_Cov_Geno_Err)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Low_Cov_Geno_Err, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = (nrow(ind_hap_stats)*0.01)),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Putative Genotyping Error") +
+  theme_standard
+
+```
+
+Cut-off value to remove locus if flagged as potential genotyping error in 5 or more individuals
+
+```{r message=FALSE, warning=FALSE}
+
+# Summary of count of possible genotyping errors
+
+count(filt_hap_stats, Low_Cov_Geno_Err > 5)
+
+# Create vector of loci to remove
+
+genoerror <- filt_hap_stats %>%
+    filter(Low_Cov_Geno_Err > 5)
+
+genoerror <- genoerror$CHR
+
+```
+
+`r length(genoerror)` loci were flagged as potentially affected by genotyping error
+
+#### Haplotyping Success by Individual
+
+Loci that are not successfully haplotyped in an individual due to missing data, complex locus, haplotyped genotype is higher/lower than SNP haplotype in a given individual are coded as missing for that individual
+
+Problematic individual can be identified as having an increased amount of missing data and a low proportion of successfully haplotyped loci
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(ind_hap_stats, aes(x = Prop_Success)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Prop_Success, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.8),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Proportion of Loci Successfully Haplotyped") +
+  theme_standard
+
+```
+
+Problem individuals can be identified by choosing a cut-off value for the minimum proportion of sucessfully haplotyped loci and excluding individuals below that threshold value
+
+```{r}
+
+# Count individuals above set threshold
+
+count(ind_hap_stats, Prop_Success < 0.8)
+
+# Create vector of indv to remove (choose cut-off)
+
+ind_fail <- filter(ind_hap_stats, Prop_Success < 0.8)
+
+#View(ind_fail)
+
+```
+
+#### Paralogs by Individual
+
+Individuals with high proportion of loci flagged as possible paralogs should be flagged as potential problem individuals
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(ind_hap_stats, aes(x = Poss_Paralogs)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Poss_Paralogs, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 10),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Putative Paralogs") +
+  theme_standard
+
+```
+
+Cut-off for individuals with loci flagged paralogs in > 10% of loci is `r nrow(filt_hap_stats)*0.01`
+
+```{r}
+
+# Count individuals above set threshold
+
+count(ind_hap_stats, Poss_Paralogs > (nrow(filt_hap_stats)*0.1))
+
+# Create vector of indv to remove (choose cut-off)
+
+ind_paralog <- ind_hap_stats %>%
+  filter(Poss_Paralogs > (nrow(filt_hap_stats)*0.1))
+
+ind_paralog <- ind_paralog$hiseq_id
+
+```
+
+The highest number of flagged loci in an individuals is `r max(ind_hap_stats$Poss_Paralogs, na.rm = TRUE)`, which is equivalent to `r round(max(ind_hap_stats$Poss_Paralogs, na.rm = TRUE)/nrow(filt_hap_stats), digits = 4)*100`% of loci
+
+#### Allelic Droput and Genotyping Error by Individual
+  
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(ind_hap_stats, aes(x = Low_Coverage_Errors)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = quantile(Low_Coverage_Errors, 0.9, na.rm = TRUE)),
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 10),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Putative Genotyping Errors", y = "Individuals") +
+  theme_standard
+
+```
+
+Remove individuals with high proportion of loci that have been flagged as potential allele dropouts/genotyping error.
+
+```{r}
+
+# Count individuals above set threshold
+
+count(ind_hap_stats, Low_Coverage_Errors > 40)
+
+# Create vector of indv to remove (choose cut-off)
+
+ind_geno <- ind_hap_stats %>%
+    filter(Low_Coverage_Errors > 40)
+
+ind_geno <- ind_geno$hiseq_id
+
+```
+
+The highest number of flagged loci in an individuals is `r max(ind_hap_stats$Low_Coverage.Errors, na.rm = TRUE)`, which is equivalent to `r round(max(ind_hap_stats$Low_Coverage.Errors, na.rm = TRUE)/nrow(filt_hap_stats), digits = 4)*100`% of loci
+
+**Filter flagged loci (individuals)**
+  
+## Read in Genepop
+  
+Load genepop file with haplotyped loci.
+
+```{r message=FALSE, warning=FALSE}
+
+# Import genepop file
+
+yoy.gen <- read.genepop(file = here("filter", "data", "yoy.gen"), ncode = 3L, quiet = FALSE)
+
+yoy.gen
+
+yoy_inds <- tibble(indNames(yoy.gen)) %>%
+  rename(hiseq_id = `indNames(yoy.gen)`)
+
+# produce strata
+
+yoy_strata <- read_csv(here("filter", "data", "yoy_sample_data.csv")) %>%
+  left_join(yoy_inds, .)
+
+# assign strata
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# Load last stats files
+
+ind_stats_yoy_f15 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f15") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_f15 <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_f15")
+
+```
+
+Unfiltered haplotyped data set contains `r nInd(yoy.gen)` individuals and `r nLoc(yoy.gen)` loci
+
+```{r}
+
+# Remove flagged loci
+
+remove_loci <- c(prop_haplotyped, poss_paralog, excess_SNPs, hap_n, genoerror)
+
+yoy.gen <- genind.rem.loci(yoy.gen, remove_loci)
+
+# Write list of removed loci to file to later remove from vcf file
+
+remove_loci <- tibble(remove_loci)
+
+write_delim(remove_loci, here("filter", "data", "hap_fail.loci"))
+
+# Remove flagged individuals, if any
+
+remove_ind <- rbind(ind_fail, ind_paralog, ind_geno)
+remove_ind <- remove_ind$hiseq_id
+
+yoy.gen <- gen.ind.rem.Ind(yoy.gen, remove_ind)
+
+yoy.gen
+
+```
+
+After filter data set contains `r nInd(yoy.gen)` individuals and `r nLoc(yoy.gen)` loci
+
+### Duplicates
+
+Estimate relatedness values of duplicate samples
+
+```{r message=FALSE, warning=FALSE, echo = FALSE, eval = FALSE}
+
+# convert genid to df to be used as genetic input
+
+yoy_df <- genind2df(yoy.gen, usepop = FALSE, oneColPerAll = TRUE) %>%
+  rownames_to_column("hiseq_id")
+
+write_delim(yoy_df, here("filter", "data", "yoy_dupe.input"), col_names = FALSE, delim = "\t")
+
+genotypedata <- readgenotypedata(here("filter", "data", "yoy_dupe.input"))
+
+related <- coancestry(genotypedata$gdata, dyadml = 1)
+
+related <- related$relatedness
+
+write_csv(related, here("filter", "data", "yoy_dupe.output"))
+
+#rm(related)
+#rm(genotypedata)
+
+```
+
+Results
+
+```{r message=FALSE, warning=FALSE, echo = FALSE, fig.height=5, fig.width=5}
+
+dupes_related <- read_csv(here("filter", "data", "yoy_dupe.output"))
+
+dupes1 <- dupes_related %>%
+  select(pair.no, ind1.id, ind2.id, dyadml) %>%
+  rename(relatedness = dyadml) %>%
+  rename(hiseq_id = ind1.id) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, site_shrt, region, year, month,  relatedness))
+  
+dupes2 <- dupes_related %>%
+  select(ind2.id) %>%
+  rename(hiseq_id = ind2.id) %>%
+  left_join(yoy_strata) %>%
+  select(c(hiseq_id, sample_id, stage, sex, site_shrt, region, year, month)) %>%
+  rename(hiseq_id_2 = hiseq_id) %>%
+  rename(sample_id_2 = sample_id) %>%
+  rename(stage_2 = stage) %>%
+  rename(sex_2 = sex) %>%
+  rename(site_shrt_2 = site_shrt) %>%
+  rename(region_2 = region) %>%
+  rename(year_2 = year) %>%
+  rename(month_2 = month)
+
+# Find duplicates based on relatedness values > 0.7
+
+dupes_related <- cbind(dupes1, dupes2) %>%
+  mutate(across(relatedness, round, 2)) %>% 
+  arrange(desc(relatedness))
+
+write_csv(dupes_related, here("filter", "data", "yoy_dupe_related.csv"))
+
+# change the threshold below after initially looking at relatedness data
+
+dupes <- dupes_related %>%
+  filter(relatedness > 0.7)
+
+write_csv(dupes, here("filter", "data", "yoy_dupes.csv"))
+
+# Find 'real duplicates' based on matching sample IDs
+
+real_dupes <- dupes %>%
+  filter_("sample_id==sample_id_2") %>% 
+  filter(site_shrt != "FBC" & site_shrt != "LLM")
+
+# Find 'other duplicates' based on high relatedness but not matching sample IDs
+
+other_dupes <- anti_join(dupes, real_dupes)
+
+# Find 'suspect dupes', i.e. other dupes but from different sites
+
+suspect_dupes <- filter(other_dupes, site_shrt != site_shrt_2)
+
+# plot distribution of relatedness values
+
+ggplot(dupes_related, aes(x = relatedness)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(relatedness)),
+             color = "darkblue", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.7),
+             color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+  ggtitle("Duplicates") +
+  ylim(0, 20) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+dupes_wo_FBC_LLM <- dupes %>% 
+  filter(site_shrt != "FBC" & site_shrt != "LLM" & site_shrt_2 != "FBC" & site_shrt_2 != "LLM") 
+
+```
+
+Compare genotypes between duplicates
+
+```{r, fig.height=5, fig.width=5}
+
+yoy_df <- genind2df(yoy.gen,
+                   usepop = TRUE,
+                   sep = ":", oneColPerAll = FALSE) %>%
+  select(-pop) %>%
+  rownames_to_column()
+
+genolist = list()
+
+for (i in rownames(dupes)) {
+    # ... make some data
+    geno <- yoy_df %>%
+      filter(rowname %in% dupes[i,]) %>%
+      select(-rowname) %>%
+      rownames_to_column %>% 
+      gather(LOCUS, value, -rowname) %>% 
+      spread(rowname, value) %>%
+      rename(Ind1 = "1", Ind2 = "2")
+    
+    geno$i <- i  # maybe you want to keep track of which iteration produced it?
+    genolist[[i]] <- geno # add it to your list
+}
+
+geno_error = do.call(rbind, genolist) %>%
+  filter(Ind1 != Ind2)
+
+# genoerrors per pair
+
+geno_error_pair <- count(geno_error, i) %>%
+  arrange(desc(n))
+
+# compare loci affected by genotyping error
+
+geno_error_locus <-  count(geno_error, LOCUS) %>%
+  arrange(desc(n))
+
+ggplot(geno_error_locus, aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") +
+#  geom_vline(aes(xintercept = mean(n, na.rm = TRUE)),
+           #  color = "darkblue", linetype = "dashed", size = 1) +
+ # geom_vline(aes(xintercept = quantile(n, 0.95)),
+#color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Number of Genotyping Errors Per Locus") +
+  theme_standard
+
+```
+
+Remove duplicates and loci with high genotyping error.
+
+```{r}
+
+#View(geno_error)
+
+remove_loci <- filter(geno_error_locus, n > 1)
+
+# Remove flagged loci
+
+remove_loci <- remove_loci$LOCUS
+yoy.gen <- genind.rem.loci(yoy.gen, remove_loci)
+
+remove_loci <- tibble(remove_loci)
+
+write_delim(remove_loci, here("filter", "data", "dupe_error.loci"), col_names = FALSE, delim = "\t")
+
+# Remove one from each pair of duplicates
+
+dist_dupe1 <- distinct(remove_dupe_1)
+
+dist_dupe2 <- distinct(remove_dupe_2)
+
+remove_dupes <- dist_dupe2$hiseq_id
+
+yoy.gen <- gen.ind.rem.Ind(yoy.gen, remove_dupes)
+
+```
+
+### Heterozygosity
+
+Generate summary statistics
+
+```{r, message=FALSE, warning=FALSE}
+
+# List of individuals left after haplotyping
+
+yoy_inds <- tibble(indNames(yoy.gen)) %>%
+  rename(hiseq_id = `indNames(yoy.gen)`)
+
+# update strata without duplicates
+
+yoy_strata <- left_join(yoy_inds, yoy_strata) %>%
+  mutate(library = as.numeric(library)) %>%
+  mutate(site_shrt = ordered(site_shrt, levels = site_order_shrt))
+
+# assign strata
+
+strata(yoy.gen) <- yoy_strata
+
+setPop(yoy.gen) <- ~site_shrt
+
+# Generate genetic diversity stats
+
+gendiv <- summary(yoy.gen)
+
+dat <- genind2hierfstat(yoy.gen)
+gendiv2 <- basic.stats(dat)
+
+```
+
+Compare observed (Ho) and expected (He) heterozygosity for all individuals across all populations.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Observed heterozygosity per locus
+
+Ho <- as.data.frame(gendiv$Hobs) %>% 
+  rownames_to_column("LOCUS") %>%
+  rename(Ho = `gendiv$Hobs`)
+
+# Expected heterozygosity per locus
+
+Hs <- as.data.frame(gendiv$Hexp) %>% 
+  rownames_to_column("LOCUS") %>%
+  rename(Hexp = `gendiv$Hexp`)
+
+# Expected and observed heterozysity per locus
+
+het <- left_join(Ho, Hs, by = "LOCUS")
+
+# Plot Ho vs Hs across all individuals
+
+ggplot(het, aes(x = Ho, y = Hexp)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed", size = 1) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  labs(x = "Observed Heterozygosity Ho", y = "Within Cluster Diversity Hs (Hexp)") +
+  ggtitle("") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+Remove monomorphic loci and those highly deviating trend above
+  
+```{r monomorphic}
+
+monomorphic <- filter(Ho, Ho == 0) %>%
+  select(LOCUS)
+
+write_delim(monomorphic, here("filter", "data", "monomorphic.loci"), col_names = FALSE, delim = "\t")
+
+remove_loci <- monomorphic$LOCUS
+yoy.gen <- genind.rem.loci(yoy.gen, remove_loci)
+
+```
+
+### Library Effects
+
+#### PCA to Assess for Library Effects
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+ind_stats_yoy_f15 <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_f15") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+# PCA
+
+x <- tab(yoy.gen, freq=TRUE, NA.method="mean")
+
+pca <- dudi.pca(df = x, center = TRUE, scale = FALSE, scannf = FALSE, nf = 10)
+
+eig <- eigenvalues(pca)
+
+# Plot
+
+pc_inds  <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`) %>%
+  inner_join(ind_stats_yoy_f15) %>%
+  mutate(library = as.factor(library))
+
+# Plot by library and region
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = region, fill = region, color = region)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Region") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = library, fill = library, color = library)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Library") +
+  scale_fill_manual(values=lib_col) +
+  scale_color_manual(values=lib_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95, size = 2) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+```
+
+Non-randomly sampled siblings from western Gulf and library effects resulting from libraries 2, 3, and 5 are distorting the PCA. Remove non-randomly sampled individuals, redo PCA, then remove loci driving library effects, and redo PCA a third time.
+
+Use related results from `Duplicates` section to remove individuals that might be related. Plot relatedness to determine cut off
+
+```{r message=FALSE, warning=FALSE, echo = FALSE, fig.height=5, fig.width=5}
+
+# reduce dataset to putative kin
+
+# eyeball the data to choose this cut off
+
+put_kin <- filter(dupes_related, relatedness >= 0.4 & relatedness < 0.7)
+
+# plot
+
+ggplot(put_kin, aes(x = relatedness)) +
+  geom_histogram(binwidth = 0.05, color = "black", fill = "grey") +
+  labs(x = "Relatedness", y = "Number of Pairs") +
+ # ggtitle("All Individuals") +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+Histogram suggests the presence of three groups. Remove one individual from each pair with relatedness > 0.2 for PCA.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# change the threshold below after initially looking at relatedness data
+
+remove_inds <- put_kin$hiseq_id_2
+
+yoy_wo_kin.gen <- gen.ind.rem.Ind(yoy.gen, remove_inds)
+
+# PCA
+
+x <-tab(yoy_wo_kin.gen, freq=TRUE, NA.method="mean")
+
+pca <- dudi.pca(df = x, center = TRUE, scale = FALSE, scannf = FALSE, nf = 10)
+
+eig <- eigenvalues(pca)
+
+# Plot
+
+pc_inds  <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`) %>%
+  inner_join(ind_stats_yoy_f15) %>%
+  mutate(library = as.factor(library))
+
+# Plot by library and region
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = region, fill = region, color = region)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Region") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95) +
+ # xlim(c(-4.5, 4.5)) +
+ # ylim(c(-5, 5)) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = library, fill = library, color = library)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Library") +
+  scale_fill_manual(values=lib_col) +
+  scale_color_manual(values=lib_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95, size = 2) +
+ # xlim(c(-4.5, 4.5)) +
+  #ylim(c(-5, 5)) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+```
+
+Identify individuals driving PCA patterns.
+
+```{r fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+
+# loading plot individuals
+
+ggplot(pc_inds, aes(x = hiseq_id, y = Loading1, fill = region)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = quantile(pc_inds$Loading1, 0.99)), 
+  color = "red") +
+  facet_grid(. ~ library, scales = "free") +
+  labs(x = "Individual", y = "Loading Principle Component 1") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard +
+  theme(axis.text.x = element_blank())
+
+# loading plot individuals
+
+ggplot(pc_inds, aes(x = hiseq_id, y = Loading2, fill = region)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = quantile(pc_inds$Loading2, 0.99)), 
+  color = "red") +
+  facet_grid(. ~ library, scales = "free") +
+  labs(x = "Individual", y = "Loading Principle Component 2") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard +
+  theme(axis.text.x = element_blank())
+
+```
+
+#### Identify Outliers by Library Using BayeScan
+
+Produce genepop and BayeScan files grouped by library.
+
+```{r, eval = FALSE}
+
+# with sibs
+
+inds <- tibble(indNames(yoy.gen)) %>%
+  rename(hiseq_id = `indNames(yoy.gen)`)
+
+temp <- left_join(inds, yoy_strata)
+
+strata(yoy.gen) <- temp
+
+# Export files by Lib
+
+setPop(yoy.gen) <- ~library
+
+writeGenPop(yoy.gen, file.name = here("filter", "data", "yoy_bayescan.gen"), comment = "yoy_bayescan.gen")
+
+```
+
+Produce `BayeScan` file from genepop
+  
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+java -jar /usr/local/bin/PGDSpider2-cli.jar -inputfile yoy_bayescan.gen -inputformat GENEPOP -outputfile yoy_bayescan_lib.txt -outputformat BAYE_SCAN -spid genepop_bayescan.spid
+
+
+```
+
+Prior odds for the neutral model are determined using `-pr_odds` and indicate how much more likely the neutral model is compared to the model of selection. Prior odds of 10 indicate the neutral mode is 10x more likely. The test of selection becomes more conservative with increasing prior odds. For large number datasets (many loci, individuals, and populations) the prior odds should have little influence on the results, but for realistic datasets (<20 populations), the choice of prior odds can have strong effects and should be adjusted based on the number of loci included in the dataset. For < 1000 loci, prior odds of 10 is reasonable. For larger datasets (1000 to 10,000 loci), prior odds of 100 are more appropriate. 
+
+Short, successive pilot runs (`-nbp`) are used to adjust acceptance rates between 0.25-0.45 (`-pilot` determines iterations). Choose a proposal distribution for reversible jumps by estimating mean and variance for all alphas under the saturated model (containing all alpha parameters), which is close to full conditional distribution and generally creates conservative enough parameters to ensure convergence. 
+
+Sample size (`-n`) corresponds to the number of iterations the program will use for estimation of parameters after the initial burn in (`-burn`). The thinning interval (`-thin`) is the number of intervals between two samples. This reduces autocorrelation from data generated using Markov chain. The total number of iterations is the sample size x thinning intervals plus the burn in.
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+bayescan_2.1 yoy_bayescan_lib.txt -od . -o pr1k_burn200k_n30k_thin50 -all_trace -threads 25 -n 30000 -thin 50 -nbp 20 -pilot 5000 -burn 200000 -pr_odds 1000 -out_pilot -out_freq
+
+```
+
+Check parameters and evaluate convergence of the run.
+
+```{r}
+
+# read in genepop
+
+yoy_bs.gen <- read.genepop(file = here("filter", "data", "yoy_bayescan.gen"), ncode = 3L, quiet = FALSE)
+
+# number of Loci
+
+loci_lib <- as_tibble(locNames(yoy_bs.gen)) %>% 
+  rename(LOCUS = value)
+
+read_lines(here("filter", "data", "pr1k_burn200k_n30k_thin50_Verif.txt"), skip = 3, n_max = 11)
+
+```
+
+Plot posterior distributions. The full output of the MCMC algorithm is in `*.sel`. Each line corresponds to an iteration of the MCMC algorithm where columns contain an iteration index, log-likelihood, F<sub>ST</sub> coefficient for every population, and alpha coefficients for every locus.
+
+Counting the null values of alpha gives the posterior probability for the neutral model; this is only written out if the `-all_trace` flag is enabled).
+
+```{r}
+
+lib_order <- c("lib1", "lib2", "lib3", "lib4", "lib5", "lib6", "lib7", "lib8", "lib9", "lib10", "lib11")
+
+# Number of groups
+
+p <- 11
+
+# Vector of Fst values calc
+
+p <- c(1:p)
+p <- paste("fst", p, sep = "")
+
+# Number of loci
+
+l <- 4483
+
+# Vector of Fst values calc
+
+l <- c(1:l)
+l <- paste("alpha", l, sep = "")
+
+# Column names
+
+c <- c("iteration", "logL", p, l)
+
+# Read chain data
+
+sel <- read_table2(here("filter", "data", "pr1k_burn200k_n30k_thin50.sel"), skip = 1, col_names = c, col_types = cols(.default = "n")) %>%
+  rename(lib1 = fst1) %>%
+  rename(lib2 = fst2) %>%
+  rename(lib3 = fst3) %>%
+  rename(lib4 = fst4) %>%
+  rename(lib5 = fst5) %>%  rename(lib6 = fst6) %>%
+  rename(lib7 = fst7) %>%
+  rename(lib8 = fst8) %>%
+  rename(lib9 = fst9) %>%
+  rename(lib10 = fst10) %>%
+  rename(lib11 = fst11)
+
+```
+
+Trace likelihoods over iterations
+
+```{r fig.height=4, fig.width=12}
+
+mean <- mean(sel$logL)
+std <- sd(sel$logL)
+
+# Plot likelihood logL
+
+ggplot(sel, aes(x = iteration, y = logL)) +
+  geom_line(color = "darkblue") +
+  geom_hline(yintercept = (mean+std), color = "darkred", linetype = "dotted", size = 1) +
+  geom_hline(yintercept = mean, color = "darkred", linetype = "dashed", size = 1) +
+  geom_hline(yintercept = (mean-std), color = "darkred", linetype = "dotted", size = 1) +
+  labs(x = "iteration", y = "log Likelihood") +
+  theme_standard
+
+```
+
+Trace values of F<sub>ST</sub> over iterations.
+
+```{r fig.height=5, fig.width=5}
+
+library(coda)
+
+temp <- sel %>%
+  select(iteration, lib1, lib2, lib3, lib4, lib5, lib6, lib7, lib8, lib9, lib10, lib11) %>%
+  gather(lib, value, 2:12, -iteration) %>%
+  mutate(lib = ordered(lib, levels = lib_order))
+
+# Recreate an MCMC object with the correct thinning interval
+
+chain <- mcmc(sel, thin = 50)
+
+str(chain)
+
+# Plot library-specific Fst coefficients
+
+ggplot() +
+  geom_point(data = temp, aes(x = iteration, y = value, colour = lib), size = 1, alpha = 0.25) +
+  labs(x = "Iteration", y = "Mean Fst Per Library") +
+  scale_color_manual(values = lib_col) +
+  theme_standard +
+  theme(legend.text=element_text(size=12), legend.title=element_text(size=12)) +
+  guides(colour = guide_legend(nrow=1, byrow=TRUE, override.aes = list(size = 5, alpha = 1)))
+
+
+```
+
+Verify that sample size used to estimate posteriors is sufficiently large. Effective sample size to estimate parameters can be smaller than value used for BayeScan run (30,000). MCMC explores the parameter space by moving in small steps. Therefore, two consecutive values will be strongly correlated; used thinning interval of 50 to reduce autocorrelation. 
+
+Check correlation between sampled parameter values for thinned chains used to estimate posterior probability. Effective sample size will than value used for BayeScan run (30,000) if there is some correlation.
+
+```{r fig.height=5, fig.width=5}
+
+eff <- as.data.frame(effectiveSize(chain)) %>%
+  rename(effSize = `effectiveSize(chain)`) %>%
+  rownames_to_column("parameter") %>%
+  mutate(paramtype = ifelse(grepl("lib", parameter), "fst",
+                            ifelse(grepl("alpha", parameter), "alpha",
+                                   ifelse(grepl("logL", parameter), "likelihood", "other")))) %>%
+  filter(paramtype != "other")
+
+ggplot(eff, aes(x = effSize)) +
+  geom_histogram(binwidth = 5000, color = "black", fill = "grey") +
+  geom_vline(xintercept = 30000, color = "darkred", linetype = "dashed") +
+  facet_grid(paramtype ~ . , scales = "free") +
+  theme_standard
+
+```
+
+Effective size of the likelihood sample should be smaller than the input value of 30,000. F<sub>ST</sub> parameters are less affected by correlation because correlation decreases more rapidly for F<sub>ST</sub> values than for likelihood values. 
+
+**Test for Convergence**
+
+Test for non-convergence of chains using Geweke's convergence diagnostic which compares the means of the first and last parts of the MC and reports the z-scores for each parameter.
+
+For ÃÂ± = 0.05, the critical values of z are Ã¢ÂÂ 1.96 and +1.96, i.e. if z values fall within those boundaries indicative of equality of means and therefore convergence of MCMC. On the otherhand z < -1.96 or z > 1.96 null hypothesis of equality of means should be rejected.
+
+```{r fig.height=6, fig.width=4}
+
+geweke <- geweke.diag(chain, frac1 = 0.1, frac2 = 0.5)
+
+z <-as.data.frame(geweke$z) %>%
+  rename(z = `geweke$z`) %>%
+  rownames_to_column("parameter") %>%
+  mutate(paramtype = ifelse(grepl("lib", parameter), "fst",
+                                   ifelse(grepl("alpha", parameter), "alpha",
+                                          ifelse(grepl("logL", parameter), "likelihood", "other")))) %>%
+  filter(paramtype != "other")
+
+ggplot(z, aes(x = z)) +
+  geom_histogram(color = "black", fill = "grey") +
+  geom_vline(xintercept = -1.96, color = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = 1.96, color = "darkred", linetype = "dashed") +
+  facet_grid(paramtype ~ . , scales = "free") +
+  theme_standard
+
+```
+
+**Other Output Files**
+
+Results of pilot runs are in `*_prop.txt`. Acceptance rates for different model parameters are in `*_AccRte.txt`, allele frequencies (posterior mean) for each locus and grouping are in `*_freq.txt`.
+
+**Compare F<sub>ST</sub>, Alpha, and q-values**
+
+The file `_fst.txt` contains one locus per row (first column). Columns 2-4 correspond to posterior probability for the model: including selection (`prob`), log10 of posterior odds for the model including selection (`log10PO`), q-value for the model including selection (`qval`). These are related to the test of local adaptation, i.e. the mode including locus-specific effect alpha.
+
+The fifth column is estimated locus-specific effect alpha (`alpha`) which indicates the strength and direction, where positive values indicate diversifying selection. The final column is the locus-specific F<sub>ST</sub> coefficient averaged over populations (`fst`). 
+Use the q-value to determine if a locus is a good candidate for a locus being under the influence of selection.
+
+```{r message=FALSE, warning=FALSE}
+
+fst <- read_table2(here("filter", "data", "pr1k_burn200k_n30k_thin50_fst.txt"), skip = 1, c("temp", "prob", "log10PO", "qval", "alpha", "fst")) %>%
+  column_to_rownames("temp") %>%
+  mutate(log10q = log10(qval))
+
+fst <- bind_cols(loci_lib, fst)
+
+```
+
+**Distribution of q-values and probabilties**
+
+```{r fig.height=5, fig.width=5}
+
+# q values
+
+ggplot(fst, aes(x = qval)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(xintercept = (0.05), color = "darkred", linetype = "dashed") +
+  scale_y_sqrt() +
+  labs(x = "q-value", y = "Sqrt of Number of Loci") +
+  theme_standard
+
+count(fst, qval <= 0.05)
+count(fst, qval <= 0.01)
+count(fst, qval <= 0.001)
+
+```
+
+*Distribution of Estimated F<sub>ST</sub> and Locus-specific Alpha Component*
+
+*Alpha = 0: no selection
+*Alpha > 0: positive selection
+*Alpha < 0: balancing selection
+
+```{r fig.height=5, fig.width=5}
+
+ggplot(fst, aes(x = alpha)) +
+  geom_histogram(color = "black", fill = "grey") +
+  geom_vline(xintercept = 0, color = "darkred", linetype = "dashed") +
+  scale_y_sqrt() +
+  labs(x = "Alpha", y = "Sqrt Number of Loci") +
+  theme_standard
+
+ggplot(fst, aes(x = fst)) +
+  geom_histogram(color = "black", fill = "grey") +
+  scale_y_sqrt() +
+  labs(x = "Fst", y = "Sqrt Number of Loci") +
+  theme_standard
+
+ggplot(fst, aes(x = alpha, y = fst)) +
+  geom_point(shape = 1, size = 2) +
+  geom_smooth(color = "darkblue", linetype = "dashed") +
+  geom_vline(xintercept = 0, color = "darkred", linetype = "dashed") +
+  labs(x = "Locus-specific Effect Alpha", y = "Mean Fst per Locus") +
+  theme_standard
+
+```
+
+*Relationship log10(qvalue) and F<sub>ST</sub> per Locus*
+
+```{r fig.height=5, fig.width=5}
+
+ggplot(fst, aes(x = log10q, y = fst)) +
+  geom_point(shape = 1, size = 2, color = "black") +
+  geom_vline(xintercept = log10(0.05), color = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = log10(0.01), color = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = log10(0.001), color = "darkred", linetype = "dashed") +
+  geom_hline(aes(yintercept = mean(fst, na.rm = TRUE)), 
+             color = "darkblue", linetype = "dashed", size = 0.5) +
+  geom_hline(aes(yintercept = quantile(fst, 0.05, na.rm = TRUE)), color = "darkblue", linetype = "dashed", size = 0.5) +
+  labs(x = "log10(qvalue)", "Fst per Locus") +
+  theme_standard
+
+```
+
+Identify outlier loci with q-value < 0.001 and remove from genid
+
+```{r}
+
+# produce sets of outliers based on the different q values
+
+outlier_bayescan <- fst %>%
+  filter(qval < 0.05) %>%
+  select(c(LOCUS, fst, qval))
+
+#write_delim(outlier_bayescan, "../Data/filter/HS1_9R2_MiSeq_Ref/lib_outliers/bayescan_final.outlier", delim = "\t")
+
+write_delim(outlier_bayescan, here("filter", "data", "yoy_bayescan.outlier"), delim = "\t")
+
+rm(sel)
+rm(chain)
+rm(eff)
+rm(geweke)
+
+```
+
+#### Assess Patterns Among Library Outliers
+
+After removing loci driving library effects in PCA, it is difficult to assess the effect of removing additional loci identified as library outliers by BayeScan. Therefore, use PCA to assess the patterns driven by library outliers identified by BayeScan.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# retain outlier loci identified by bayescan
+
+bs_outlier_0.05 <- read_delim(here("filter", "data", "yoy_bayescan.outlier"), delim = "\t")
+
+remove_loci <- tibble(locNames(yoy_bs.gen)) %>%
+  rename(LOCUS = `locNames(yoy_bs.gen)`) %>%
+  anti_join(bs_outlier_0.05)
+
+remove_loci <- remove_loci$LOCUS
+
+temp.gen <- genind.rem.loci(yoy_bs.gen, remove_loci)
+
+# PCA
+
+x <- tab(temp.gen, freq=TRUE, NA.method="mean")
+
+pca <- dudi.pca(df = x, center = TRUE, scale = FALSE, scannf = FALSE, nf = 10)
+
+eig <- eigenvalues(pca)
+
+# Plot
+
+pc_inds  <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`) %>%
+  separate(hiseq_id, into = c("Zone", "Lib_INDV"), sep = 3, remove = TRUE) %>%
+  separate(Lib_INDV, into = c("temp", "id"), sep = 1, remove = TRUE) %>%
+  unite("hiseq_id", c("Zone", "id"), sep="_") %>%
+  inner_join(ind_stats_yoy_f15) %>%
+  select(-(temp))
+
+# Plot by library and region
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = region, fill = region, color = region)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Region") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95)
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = library, fill = library, color = library)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Library") +
+  scale_fill_manual(values=lib_col) +
+  scale_color_manual(values=lib_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95)
+
+plot.eigen.variance(eig)
+
+```
+
+Identify individuals driving PCA patterns.
+
+```{r fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+
+# loading plot individuals
+
+ggplot(pc_inds, aes(x = hiseq_id, y = Loading1, fill = region)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = quantile(pc_inds$Loading1, 0.95)), 
+  color = "red") +
+  facet_grid(. ~ library, scales = "free") +
+  labs(x = "Individual", y = "Loading Principle Component 1") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard +
+  theme(axis.text.x = element_blank())
+
+ggplot(pc_inds, aes(x = hiseq_id, y = Loading2, fill = region)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = quantile(pc_inds$Loading2, 0.95)), 
+  color = "red") +
+  facet_grid(. ~ library, scales = "free") +
+  labs(x = "Individual", y = "Loading Principle Component 2") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard +
+  theme(axis.text.x = element_blank())
+
+```
+
+Identify alleles driving library effects. Compare allele loadings (squared PC score) and identify alleles and associated loci driving observed patterns.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# allele loadings
+
+pc_allele <- pca$c1 %>%
+  rownames_to_column("Allele") %>%
+  mutate(Loading1 = CS1^2) %>%
+  mutate(Loading2 = CS2^2) %>%
+  mutate(Loading3 = CS3^2) %>%
+  separate(Allele, c("LOCUS", "ALLELE"), sep = -4, remove = FALSE)
+
+# plot histogram
+
+ggplot(pc_allele, aes(x = Loading1)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  theme_standard
+
+```
+
+Check effect of removing library outliers
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# remove outlier loci identified by bayescan
+
+remove_loci <- bs_outlier_0.05$LOCUS
+
+temp.gen <- genind.rem.loci(yoy_wo_kin.gen, remove_loci)
+
+# PCA
+
+x <- tab(temp.gen, freq=TRUE, NA.method="mean")
+
+pca <-dudi.pca(df = x, center = TRUE, scale = FALSE, scannf = FALSE, nf = 10)
+
+eig <- eigenvalues(pca)
+
+# Plot
+
+pc_inds <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`)
+
+pc_inds  <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`) %>%
+  separate(hiseq_id, into = c("Zone", "Lib_INDV"), sep = 3, remove = TRUE) %>%
+  separate(Lib_INDV, into = c("temp", "id"), sep = 1, remove = TRUE) %>%
+  unite("hiseq_id", c("Zone", "id"), sep="_") %>%
+  inner_join(ind_stats_yoy_f15) %>%
+  select(-(temp)) %>%
+  mutate(library = as.factor(library)) 
+
+# Plot by library and region
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = region, fill = region, color = region)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Region") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = library, fill = library, color = library)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Library") +
+  scale_fill_manual(values=lib_col) +
+  scale_color_manual(values=lib_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95, size = 2) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+plot.eigen.variance(eig)
+
+```
+
+Identify individuals driving PCA patterns.
+
+```{r fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+
+# loading plot individuals on PC1
+
+ggplot(pc_inds, aes(x = hiseq_id, y = Loading1, fill = region)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = quantile(pc_inds$Loading1, 0.95)), 
+  color = "red") +
+  facet_grid(. ~ library, scales = "free") +
+  labs(x = "Individual", y = "Loading Principle Component 1") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard +
+  theme(axis.text.x = element_blank())
+
+# loading plot individuals on PC2
+
+ggplot(pc_inds, aes(x = hiseq_id, y = Loading2, fill = region)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = quantile(pc_inds$Loading2, 0.95)), 
+  color = "red") +
+  facet_grid(. ~ library, scales = "free") +
+  labs(x = "Individual", y = "Loading Principle Component 2") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard +
+  theme(axis.text.x = element_blank())
+
+```
+
+### Final Stats
+
+Remove loci found by BayeScan to be driving library effects. 
+
+Count the number of individuals from each site and remove those from sites wth too few.
+
+Write files with individuals and contigs still contained in data set and use to filter vcf file
+
+```{r}
+
+# count number of individuals per site and retain those in sites with >= 15 inds
+
+yoy_site <- yoy_strata %>% 
+  count(site_shrt) %>% 
+  filter(n >= 15)
+
+yoy_site <- yoy_site$site_shrt
+
+yoy_strata <- yoy_strata %>%
+  filter(site_shrt %in% yoy_site)
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+# remove inds from genind
+
+remove_ind <- read_csv(here("filter", "data", "yoy_sample_data.csv")) %>%
+  anti_join(yoy_strata, by = "hiseq_id")
+
+yoy_filt.gen <- gen.ind.rem.Ind(yoy.gen, remove_ind$hiseq_id)
+
+# remove loci driving library effects
+
+remove_loci <- bs_outlier_0.05$LOCUS
+
+# produce filtered genepop with kin
+
+yoy_filt.gen <- genind.rem.loci(yoy_filt.gen, remove_loci)
+
+# assign strata
+
+yoy_filt_inds <- tibble(indNames(yoy_filt.gen)) %>%
+  rename(hiseq_id = `indNames(yoy_filt.gen)`)
+
+yoy_filt_strata <- left_join(yoy_filt_inds, yoy_strata)
+
+strata(yoy_filt.gen) <- yoy_filt_strata
+
+setPop(yoy_filt.gen) <- ~site_shrt
+
+# remove monomorphic loci
+
+gendiv <- summary(yoy_filt.gen)
+
+dat <- genind2hierfstat(yoy_filt.gen)
+
+gendiv2 <- basic.stats(dat)
+
+# observed heterozygosity per locus
+
+Ho <- as.data.frame(gendiv$Hobs) %>% 
+  rownames_to_column("LOCUS") %>%
+  rename(Ho = `gendiv$Hobs`)
+
+monomorphic <- filter(Ho, Ho == 0) %>%
+  select(LOCUS)
+
+remove_loci <- monomorphic$LOCUS
+
+# produce final dataset
+
+yoy_final.gen <- genind.rem.loci(yoy_filt.gen, remove_loci)
+
+# Export list of individuals to keep in vcf file
+
+keepind <- tibble(indNames(yoy_final.gen)) %>%
+  rename(hiseq_id = `indNames(yoy_final.gen)`)
+
+write_delim(keepind, here("filter", "data", "yoy_final.ind"), delim = "\t")
+          
+# export list of loci to remove from vcf file
+
+# find loci not in yoy_final.gen that were in loci_stats_f17
+
+final_loci <- tibble(locNames(yoy_final.gen)) %>%
+  rename(CHR = `locNames(yoy_final.gen)`)
+
+remove_loci <- loci_stats_yoy_f15 %>%
+  distinct(CHR) %>%
+  anti_join(final_loci)
+
+write_delim(remove_loci, here("filter", "data", "yoy_remove.loci"), delim = "\t")
+
+```
+
+Write vcf file and 012 format
+
+```{bash, eval=FALSE}
+
+cd /home/dswift/Projects/us_blacktips/filter/data
+
+vcftools --vcf yoy_f15.recode.vcf --out yoy_f15a --keep yoy_final.ind --recode --recode-INFO-all
+
+bash /home/dswift/code/remove_loci_vcf.sh yoy_remove.loci yoy_f15a.recode.vcf
+
+vcftools --vcf vcf-minus-contigs.recode.vcf --out yoy_filt --recode --recode-INFO-all
+
+vcftools --vcf yoy_filt.recode.vcf --out yoy_filt --depth
+vcftools --vcf yoy_filt.recode.vcf --out yoy_filt --site-mean-depth
+vcftools --vcf yoy_filt.recode.vcf --out yoy_filt --missing-indv
+vcftools --vcf yoy_filt.recode.vcf --out yoy_filt --missing-site
+vcftools --vcf yoy_filt.recode.vcf --out yoy_filt --het
+
+```
+
+Review final stats
+
+```{r, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# Load stats files
+
+ind_stats_yoy_filt <- read.ind.stats(dir = here("filter", "data"), vcf = "yoy_filt") %>%
+  rename(hiseq_id = INDV) %>%
+  left_join(yoy_sample_data)
+
+loci_stats_yoy_filt <- read.loc.stats(dir = here("filter", "data"), vcf = "yoy_filt")
+
+# count
+
+count(ind_stats_yoy_filt)
+
+count(distinct(loci_stats_yoy_filt, CHR))
+
+count(loci_stats_yoy_filt)
+
+# Plot missing data per individual
+
+ggplot(ind_stats_yoy_filt, aes(x = MISS_yoy_filt)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.2),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Missing Data Per Individual") +
+  theme_standard
+
+# Plot read depth per individual
+
+ggplot(ind_stats_yoy_filt, aes(x = MEAN_DEPTH_yoy_filt)) +
+  geom_histogram(binwidth = 10, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Individual") +
+  theme_standard
+
+# Plot depth vs missing
+
+ggplot(ind_stats_yoy_filt, aes(x = MEAN_DEPTH_yoy_filt, y = MISS_yoy_filt)) +
+  geom_point() +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.2),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Individual", y = "% Missing Data") +
+  theme_standard
+
+# Plot Fis per individual
+
+ggplot(ind_stats_yoy_filt, aes(x = Fis_yoy_filt)) +
+  geom_histogram(binwidth = .01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(Fis_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Fis Per Individual") +
+  theme_standard
+
+# Plot distribution missing data per locus
+
+ggplot(loci_stats_yoy_filt, aes(x = MISS_yoy_filt)) +
+  geom_histogram(binwidth = 0.01, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MISS_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "% Missing Data Per Locus") +
+  theme_standard
+
+# Plot distribution mean read depth
+
+ggplot(loci_stats_yoy_filt, aes(x = MEAN_DEPTH_yoy_filt)) +
+  geom_histogram(binwidth = 5, color = "black", fill = "grey") +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Read Depth Per Locus") +
+  theme_standard
+
+# Plot read depth vs missing data
+
+ggplot(loci_stats_yoy_filt, aes(x = MEAN_DEPTH_yoy_filt, y = MISS_yoy_filt)) +
+  geom_point() +
+  geom_vline(aes(xintercept = mean(MEAN_DEPTH_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = 20),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = mean(MISS_yoy_filt, na.rm = TRUE)),
+  color = "red", linetype = "dashed", size = 1) +
+  geom_hline(aes(yintercept = 0.1),
+  color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Mean Depth Per Locus", y = "% Missing Data") +
+  theme_standard
+
+# Plot no of SNPs per locus
+
+loci_stats_yoy_filt %>%
+  count(CHR) %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "grey") + 
+  labs(x = "Number of SNPs per Locus") +
+  theme_standard
+
+temp <- loci_stats_yoy_filt %>%
+  count(CHR)
+
+# Plot number of SNPs per contig vs. mean depth
+
+left_join(temp, loci_stats_yoy_filt) %>%
+  ggplot() +
+  geom_point(aes(x = n, y = MEAN_DEPTH_yoy_filt)) +
+  labs(x = "Number of SNPs per Contig", y = "Mean Depth") +
+  theme_standard
+
+```
+
+### WHOA: Genotying Error Check
+
+Assess genotyping error of final dataset using Eric Anderson's package `whoa`. Estimates the rate of heterozygote miscalls based on HWE.
+
+Calculate observed/expected genotype frequencies
+
+```{r}
+
+vcf <- read.vcfR(here("filter", "data", "yoy_filt.recode.vcf"), verbose = FALSE)
+
+# compute expected and observed genotype frequencies
+
+gfreqs <- exp_and_obs_geno_freqs(vcf)
+
+# loci will be plotted
+
+geno_freqs_scatter(gfreqs, max_plot_loci = 10000)
+
+```
+
+Estimate the heterozygosity miscall rate over all read depth bins
+
+```{r}
+
+overall <- infer_m(vcf, minBin = 1e15)
+
+overall$m_posteriors
+
+```
+
+Low genotyping error (mean: <1%). Total_n in table above is total number of genotypes. Bin genotypes by read depth and estimate heterozygote miscall rate for each depth bin.
+
+```{r}
+
+binned <- infer_m(vcf, minBin = 2000)
+
+posteriors_plot(binned$m_posteriors) +
+  geom_hline(yintercept = 0.005, color = "darkred", linetype = "dashed")
+
+binned$m_posteriors
+
+```
+
+### Export Dataset
+
+```{r}
+
+# export final dataset
+
+yoy_final_inds <- tibble(indNames(yoy_final.gen)) %>%
+  rename(hiseq_id = `indNames(yoy_final.gen)`)
+
+yoy_final_strata <- left_join(yoy_final_inds, yoy_filt_strata)
+
+yoy_final_strata <- yoy_final_strata %>%
+  mutate(site_shrt = ordered(site_shrt, levels = site_order_shrt))
+
+strata(yoy_final.gen) <- yoy_final_strata
+
+# export genepop by site
+
+setPop(yoy_final.gen) <- ~site_shrt
+
+yoy_final.gen$pop <- factor(yoy_final.gen$pop, levels=site_order_shrt)
+
+writeGenPop(yoy_final.gen, file.name = here("filter", "results", "yoy_final_site.gen"), comment = "yoy_final_site.gen")
+
+# Export strata
+
+write_csv(yoy_final_strata, here("filter", "results", "yoy_final_strata.csv"))
+
+```
+
+### Number of Individuals, Loci, and SNPs
+
+```{r}
+
+# vcf
+
+loci_stats_yoy_filt %>% 
+  distinct(CHR) %>% 
+  count()
+
+ind_stats_yoy_filt %>% 
+  count()
+
+# genepop
+
+as_tibble(locNames(yoy_final.gen)) %>% 
+  rename(LOCUS = value) %>%
+  count()
+
+as_tibble(indNames(yoy_final.gen)) %>% 
+  rename(hiseq_id = value) %>%
+  count()
+
+```
+
+#### Size Distribution Among Site
+
+Use boxplots to compare the size distribution of YOY individuals among sites.
+
+```{r fig.height=5, fig.width=10,message=FALSE, warning=FALSE}
+
+# plot
+
+ggplot(yoy_final_strata, aes(x=site_shrt, y=tl)) + 
+  geom_boxplot(notch = TRUE) +
+  geom_boxplot(outlier.colour = "red") +
+  labs(x = "Site", y = "Total Length (mm)") +
+  theme_standard +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20))
+
+# save
+
+ggsave(here("filter", "results", "yoy_final_tl_dist.png"))
+
+# numbers by site
+
+n_site <- count(yoy_final_strata, site_shrt) %>%
+  arrange(desc(n))
+
+mean(n_site$n)
+
+# numbers by month
+
+n_month <- count(yoy_final_strata, month) %>%
+  arrange(desc(n))
+
+mean(n_site$n)
+
+# numbers by site and lib
+
+sites_libs <- yoy_final_strata %>% 
+  group_by(site_shrt) %>% 
+  count(library)
+
+```
+
+All individuals were sampled during March to November (2012-2019). All but 4 individuals were sampled April to October. 
+
+All individuals are less than 800mm TL, excluding 4 individuals >= 820cm TL who were observed to be YOY by samplers. 54.5% of individuals retained after filter were observed to be YOY. 
+
+### PCA
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+# PCA
+
+x <- tab(yoy_final.gen, freq=TRUE, NA.method="mean")
+
+pca <-dudi.pca(df = x, center = TRUE, scale = FALSE, scannf = FALSE, nf = 10)
+
+eig <- eigenvalues(pca)
+
+# Plot
+
+pc_inds <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`)
+
+pc_inds  <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`) %>%
+  separate(hiseq_id, into = c("Zone", "Lib_INDV"), sep = 3, remove = TRUE) %>%
+  separate(Lib_INDV, into = c("temp", "id"), sep = 1, remove = TRUE) %>%
+  unite("hiseq_id", c("Zone", "id"), sep="_") %>%
+  inner_join(ind_stats_yoy_f15) %>%
+  select(-(temp)) %>%
+  mutate(library = as.factor(library)) 
+
+# Plot by library and region
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = region, fill = region, color = region)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Region") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = library, fill = library, color = library)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Library") +
+  scale_fill_manual(values=lib_col) +
+  scale_color_manual(values=lib_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95, size = 2) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+plot.eigen.variance(eig)
+
+```
+
+Redo without sibs.
+
+```{r fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+sibs <- dupes_related %>%
+  filter(relatedness >= 0.2)
+
+temp.gen <- gen.ind.rem.Ind(yoy_final.gen, sibs$hiseq_id)
+
+# PCA
+
+x <- tab(temp.gen, freq=TRUE, NA.method="mean")
+
+pca <-dudi.pca(df = x, center = TRUE, scale = FALSE, scannf = FALSE, nf = 10)
+
+eig <- eigenvalues(pca)
+
+# Plot
+
+pc_inds <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`)
+
+pc_inds  <- PC.ind(pca) %>%
+  rename(hiseq_id = `LIB_ID`) %>%
+  separate(hiseq_id, into = c("Zone", "Lib_INDV"), sep = 3, remove = TRUE) %>%
+  separate(Lib_INDV, into = c("temp", "id"), sep = 1, remove = TRUE) %>%
+  unite("hiseq_id", c("Zone", "id"), sep="_") %>%
+  inner_join(ind_stats_yoy_f15) %>%
+  select(-(temp)) %>%
+  mutate(library = as.factor(library)) 
+
+# Plot by library and region
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = region, fill = region, color = region)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Region") +
+  scale_fill_manual(values=region_col) +
+  scale_color_manual(values=region_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+ggplot(pc_inds , aes(x = Axis1, y = Axis2, label = library, fill = library, color = library)) +
+  geom_point(alpha = 0.75, size = 4) +
+  labs(x = paste("PC1:", round(eig[1, 3], digits = 3), "%"), 
+       y = paste("PC2:", round(eig[2, 3], digits = 3), "%")) +
+  ggtitle("By Library") +
+  scale_fill_manual(values=lib_col) +
+  scale_color_manual(values=lib_col) +
+  theme_standard + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(level = 0.95, size = 2) +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE))
+
+plot.eigen.variance(eig)
+
+
+
+```
+
+### USE THE CHUNK BELOW TO DETERMINE WHICH PACKAGES WERE USED AND REMOVE THOSE NOT FROM THE FIRST CHUNK
+
+```{r}
+
+subset(data.frame(sessioninfo::package_info()), attached==TRUE, c(package, loadedversion))
+
+```
+

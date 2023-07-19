@@ -1,0 +1,539 @@
+---
+title: "Mitochondrial DNA: YOY Blacktips in U.S. Waters"
+author: "DG Swift"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+Assess mitochondrial DNA.
+
+# Environment
+  
+```{r, message=FALSE}
+
+.libPaths("/usr/lib64/R/library")
+
+# invalidate cache when the package version changes
+
+knitr::opts_chunk$set(
+  root.dir = "~/Projects/us_blacktips/mtDNA",
+	message = FALSE,
+	warning = FALSE,
+	cache.extra = packageVersion("tint"),
+	tidy = FALSE,
+	echo = FALSE)
+
+options(htmltools.dir.version = FALSE)
+
+# conflicts
+
+library(conflicted)
+conflict_prefer("count", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("s.label", "adegraphics")
+conflict_prefer("s.value", "adegraphics")
+conflict_prefer("scalebar", "raster")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("extract", "raster")
+conflict_prefer("degree", "igraph")
+
+# packages
+
+.libPaths("/usr/lib64/R/library")
+
+library(tidyverse)
+library(janitor)
+library(adegenet)
+library(ggthemes)
+library(tufte)
+library(tint)
+library(knitr)
+library(gdata)
+library(zvau)
+library(patchwork)
+library(here)
+library(haplotypes)
+library(reshape2)
+library(readxl)
+library(hacksaw)
+
+# source scripts
+
+source("~/code/ggplot.R")
+source("~/code/genind.R")
+source("~/code/PCA.R")
+source("~/code/DAPC.R")
+
+# orders, colors, shapes
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+site_order <- c("Bulls_Bay", 
+                "St._Helena_Sound",
+                "Port_Royal_Sound",
+                "Terra_Ceia_Bay",
+                "Waccasassa_Bay",
+                "Apalachicola_Bay",
+                "Mobile_Bay",
+                "Galveston_Bay",
+                "Matagorda_Bay",
+                "San_Antonio_Bay",
+                "Corpus_Christi_Bay")
+
+site_order_fig <- c("Bulls Bay", 
+                "St. Helena Sound",
+                "Port Royal Sound",
+                "Terra Ceia Bay",
+                "Waccasassa Bay",
+                "Apalachicola Bay",
+                "Mobile Bay",
+                "Galveston Bay",
+                "Matagorda Bay",
+                "San Antonio Bay",
+                "Corpus Christi Bay")
+
+site_order_fig_rev <- c("Corpus Christi Bay",
+                        "San Antonio Bay",
+                        "Matagorda Bay",
+                        "Galveston Bay",
+                        "Mobile Bay",
+                        "Apalachicola Bay",
+                        "Waccasassa Bay",
+                        "Terra Ceia Bay",
+                        "Port Royal Sound",
+                        "St. Helena Sound",
+                        "Bulls Bay")
+
+site_order_fig_map <- c("Galveston Bay",
+                        "Matagorda Bay",
+                        "San Antonio Bay",
+                        "Corpus Christi Bay",
+                        "Mobile Bay",
+                        "Apalachicola Bay",
+                        "Waccasassa Bay",
+                        "Terra Ceia Bay",
+                        "Bulls Bay",
+                        "St. Helena Sound",
+                        "Port Royal Sound")
+
+region_order <- c("Atl", "EGoM", "WGoM")
+
+region_order_fig <- c("Atlantic", "Eastern Gulf", "Western Gulf")
+
+region_order_fig_rev <- c("Western Gulf", "Eastern Gulf", "Atlantic")
+
+site_col <- c("#7f0000", "#b30000", "#d7301f", "#4d004b", "#810f7c", "#88419d", "#8c96c6", "#9ecae1", "#4292c6", "#08519c", "#08306b")
+
+site_col_rev <- c("#08306b", "#08519c", "#4292c6", "#9ecae1", "#8c96c6", "#88419d", "#810f7c", "#4d004b", "#d7301f", "#b30000", "#7f0000")
+
+site_col_map <- c("#9ecae1", "#4292c6", "#08519c", "#08306b", "#8c96c6", "#88419d", "#810f7c", "#4d004b", "#d7301f", "#b30000", "#7f0000")
+              
+shape11 <- c(21, 21, 21, 23, 23, 23, 23, 24, 24, 24, 24)
+
+shape11_rev <- c(24, 24, 24, 24, 23, 23, 23, 23, 21, 21, 21)
+
+shape3 <- c(21, 23, 24)
+
+shape3_rev <- c(24, 23, 21)
+
+region_col <- c('#b30000','#810f7c','#08519c')
+
+lib_col <- c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF33")
+
+options(scipen=10000)
+
+```
+
+# Analyse Sequence Data
+
+Align previously identified haplotypes to produce references.
+
+```{bash}
+
+cd /home/dswift/Projects/us_blacktips/mtdna/data
+
+# all
+
+clustalo -i clim_mtCR_all_haps.fasta -o clim_mtCR_all_haps_align.fasta --pileup --force --threads 20
+
+# Keeney et al. 2005
+
+clustalo -i clim_mtCR_US_haps.fasta -o clim_mtCR_US_haps_align.fasta --pileup --force --threads 20
+
+```
+
+## Forward Reads Only
+
+Starting with all raw forward reads.
+
+```{bash}
+
+cd /home/dswift/Projects/us_blacktips/mtdna/data/raw
+
+# move reverse reads to their own directory
+
+mv ./all/*_R_PheSharkR.ab1 ./reverse/.
+
+# produce list of all forward reads
+
+cd ./forward
+
+cp -s ../all/*_ProSharkF.ab1 .
+
+ls *_ProSharkF.ab1 > f0.txt
+
+# convert to fastq
+
+ls *_ProSharkF.ab1 | sed 's/_ProSharkF.ab1//g' | while read i; do seqret -sformat abi -osformat fastq -auto -stdout -sequence $i"_ProSharkF.ab1" > $i.fastq ; done
+
+# repeat for directories if different named files
+
+rm *_F.fastq
+
+ls *_F_ProSharkF.ab1 | sed 's/_F_ProSharkF.ab1//g' | while read i; do seqret -sformat abi -osformat fastq -auto -stdout -sequence $i"_F_ProSharkF.ab1" > $i.fastq ; done
+
+# rename sequence IDs in fastq files
+
+for file in *.fastq; do sed -i "s/^@.*/@${file%%.*}/" "$file"; done
+
+# copy to trim directory
+
+cd /home/dswift/Projects/us_blacktips/mtdna/data/01.26.23
+
+rm *
+
+cp -s ../raw/forward/*.fastq .
+
+# concatenate all forward reads
+
+cat *.fastq > f0.fastq
+
+# trim and align
+
+seqtk seq -a f0.fastq > f0.fasta
+
+cat clim_mtCR_haps.fasta f0.fasta > all.fasta
+
+clustalo -i all.fasta -o all_align.fasta --pileup --force --threads 20
+
+```
+
+Inspect alignment in BioEdit and copy names of poor quality sequences to a text file.
+
+Use text file to remove these sequences and align again.
+
+```{bash}
+
+cd /home/dswift/Projects/us_blacktips/mtdna/data/01.26.23
+
+dos2unix poor_seq*
+
+# remove poor sequences
+
+while read filename ; do rm "$filename".fastq ; done < poor_seq_1.txt
+
+# cat and align again
+
+rm f0.fastq
+
+cat *.fastq > f1.fastq
+
+seqtk seq -a f1.fastq > f1.fa
+
+cat clim_mtCR_haps.fasta f1.fa > f1.fasta
+
+clustalo -i f1.fasta -o f1_align.fasta --pileup --force --threads 20
+
+```
+
+Inspect alignment in BioEdit and copy names of poor quality sequences to a text file.
+
+Use text file to remove these sequences and align again.
+
+```{bash}
+
+cd /home/dswift/Projects/us_blacktips/mtdna/data/01.26.23
+
+dos2unix poor_seq*
+
+# remove poor sequences
+
+while read filename ; do rm "$filename".fastq ; done < poor_seq_2.txt
+
+# cat and align again
+
+rm f1.fastq
+
+cat *.fastq > f2.fastq
+
+seqtk seq -a f2.fastq > f2.fa
+
+cat clim_mtCR_haps.fasta f2.fa > f2.fasta
+
+clustalo -i f2.fasta -o f2_align.fasta --pileup --force --threads 20
+
+```
+
+Inspect alignment in BioEdit and copy names of poor quality sequences to a text file.
+
+Use text file to remove these sequences and align again.
+
+```{bash}
+
+cd /home/dswift/Projects/us_blacktips/mtdna/data/01.26.23
+
+dos2unix poor_seq*
+
+# remove poor sequences
+
+while read filename ; do rm "$filename".fastq ; done < poor_seq_3.txt
+
+# cat and align again
+
+rm f2.fastq
+
+cat *.fastq > f3.fastq
+
+seqtk seq -a f3.fastq > f3.fa
+
+cat clim_mtCR_haps.fasta f3.fa > f3.fasta
+
+clustalo -i f3.fasta -o f3_align.fasta --pileup --force --threads 20
+
+
+```
+
+Inspect alignment in BioEdit and copy names of poor quality sequences to a text file.
+
+Use text file to remove these sequences and align again.
+
+```{bash}
+
+cd /home/dswift/Projects/us_blacktips/mtdna/data/01.26.23
+
+dos2unix poor_seq*
+
+# remove poor sequences
+
+while read filename ; do rm "$filename".fastq ; done < poor_seq_4.txt
+
+# cat and align again
+
+rm f3.fastq
+
+cat *.fastq > f4.fastq
+
+seqtk seq -a f4.fastq > f4.fa
+
+cat clim_mtCR_haps.fasta f4.fa > f4.fasta
+
+clustalo -i f4.fasta -o f4_align.fasta --pileup --force --threads 20
+
+
+```
+
+
+Produce clean alignment.
+
+# Assess Haplotypes
+
+Compare your haplotypes to those found by Keeney.
+
+```{r}
+
+# import FASTA file
+
+clim_align <- read.fas(file=here("mtdna", "data", "01.26.23", "clim_925_clean.fas"))
+
+clim_align
+
+# compute an absolute pairwise character difference matrix from DNA sequence, with coding gaps parsed using simple indel coding method
+
+dist_mat <- distance(clim_align, indels = "sic")
+
+hap_dist <- melt(as.matrix(dist_mat), varnames = c("seq1", "seq2")) %>% 
+  rename(SNPs = value) %>% 
+  filter(seq1 != seq2)
+
+# infer haplotypes with coding gaps parsed using simple indel coding method
+
+hap <- haplotype(clim_align, indels="s")
+
+haplist <- hap@haplist
+
+# assess and compare with Keeney's
+
+hap_df <- plyr::ldply(haplist, rbind) %>%
+  tibble::rownames_to_column() %>%
+  pivot_longer(-rowname) %>%
+  pivot_wider(names_from=rowname, values_from=value) %>%
+  select(-name) %>%
+  row_to_names(row_number = 1)
+
+```
+
+Focus on the haplotypes found.
+
+```{r, warning=F}
+
+site_order_shrt <- c("BLB", "SHS", "PRS", "TCB", "WAB", "APB", "MOB", "GAB", "MAB", "SAB", "CCB")
+
+# import FASTA file
+
+clim_dgs <- read.fas(file=here("mtdna", "data", "01.26.23", "clim_dgs_925_clean.fas"))
+
+clim_dgs
+
+# infer haplotypes with coding gaps parsed using simple indel coding method
+
+hap <- haplotype(clim_dgs, indels="s")
+
+hap_sequence <- as_tibble(hap@sequence) %>% 
+  unite("seq", 1:ncol(.), sep = "") %>% 
+  rownames_to_column("hap")
+
+write_delim(hap_sequence, here("mtdna", "results", "hap_sequence_02.07.23.txt"), delim = "\t")
+
+hap_n <- hap@freq
+
+haplist <- hap@haplist
+
+# produce df of haplotypes
+
+dgs_haps <- data.frame(sample_id = unlist(lapply(haplist, paste, collapse = ",")), haplotype = seq_along(haplist)) %>%
+  mutate(sample_id = stringr::str_split(sample_id, ",")) %>%
+  unnest(sample_id = sample_id) %>% 
+  separate(sample_id, into = c("sample_id", "r1"), sep = "_r1", remove = TRUE) %>% 
+  separate(sample_id, into = c("sample_id", "r2"), sep = "_r2", remove = TRUE) %>% 
+  separate(sample_id, into = c("sample_id", "r3"), sep = "_r3", remove = TRUE) %>% 
+  separate(sample_id, into = c("sample_id", "r4"), sep = "_r4", remove = TRUE) %>% 
+  select(-c(r1, r2, r3, r4)) %>% 
+  group_by(sample_id) %>% 
+  distinct(.)
+
+# count number of each haplotype
+
+dgs_haps_count <- dgs_haps %>% 
+  group_by(haplotype) %>% 
+  count()
+
+yoy_strata <- read_csv(here("yoy_strata.csv")) %>% 
+  left_join(., dgs_haps, by = "sample_id")
+
+write_csv(yoy_strata, here("mtdna", "results", "yoy_strata_haps.csv"))
+
+yoy_haps <- yoy_strata %>% 
+  drop_na(haplotype)
+
+haps_site <- yoy_haps %>% 
+  count(site_shrt)
+
+# assess for kin
+
+## shouldn't be any non random sibs but check
+
+temp <- dgs_haps %>% 
+  mutate(sample_id_2 = sample_id)
+
+sibs_non_random <- read_csv(here("related", "results", "sibs_non_random.csv"))
+
+sibs_random <- read_csv(here("related", "results", "sibs_random.csv"))
+
+sibs_random_haps <- sibs_random %>% 
+  left_join(., temp[1:2], by = "sample_id") %>% 
+  rename(hap1 = haplotype) %>% 
+  relocate(hap1, .after = "type") %>% 
+  left_join(., temp[2:3], by = "sample_id_2") %>%  
+  rename(hap2 = haplotype) %>% 
+  relocate(hap2, .after = "year_diff") %>% 
+  drop_na(c(hap1, hap2))
+
+odd_year_sibs <- sibs_random_haps %>% 
+  filter(year_diff == 1)
+
+pat_sibs <- sibs_random_haps %>% 
+  filter(hap1 != hap2)
+
+### all but one sibling pair have the same haplotype ###
+
+### the one pair with different haplotypes were born 1 year apart, consistent with them being paternally related ###
+
+# haplotypes by region
+
+yoy_haps_region <- yoy_haps %>% 
+  group_by(region) %>% 
+  count(haplotype) %>% 
+  arrange(haplotype)
+
+# haplotypes by site
+
+yoy_haps_site <- yoy_haps %>% 
+  group_by(site_shrt) %>% 
+  count(haplotype) %>% 
+  mutate(site_shrt = ordered(site_shrt, levels = site_order_shrt)) %>% 
+  write_csv(., here("mtdna", "results", "yoy_haps_site.csv"))
+
+# Atlantic
+
+yoy_atl_haps <- yoy_haps %>% 
+  filter(region == "Atl") %>% 
+  count(haplotype) %>% 
+  arrange(haplotype)
+
+# Eastern Gulf
+
+yoy_egom_haps <- yoy_haps %>% 
+  filter(region == "EGoM") %>% 
+  count(haplotype) %>% 
+  arrange(haplotype)
+
+# Western Gulf
+
+yoy_wgom_haps <- yoy_haps %>% 
+  filter(region == "WGoM") %>% 
+  count(haplotype) %>% 
+  arrange(haplotype)
+
+```
+
+## Count SNPs Among Haplotypes
+
+```{r}
+
+# read in SNP matrix and rename row and column names
+
+hap_snps <- read.csv(here("mtdna", "data", "01.26.23", "clim_unique_haps_snps.csv"), skip = 3, row.names = 1)
+
+hap_snps_mat <- hap_snps %>% 
+  as.matrix()
+colnames(hap_snps_mat) <- names(hap_snps)
+rownames(hap_snps_mat) <- names(hap_snps)
+
+# convert matrix to df
+  
+hap_snps_mat <- as.data.frame(as.table(hap_snps_mat)) %>%
+  rename(SNPs = Freq) %>%
+  filter(SNPs != "ID")
+hap_snps_mat[,3] <- as.numeric(as.character(hap_snps_mat[,3]))
+
+hap_snps_mat <- hap_snps_mat %>%
+  arrange(desc(SNPs))
+
+# id haplotypes with 0 SNPs, i.e., the duplicates
+
+hap_dupes <- hap_snps_mat %>% 
+  filter(SNPs == 0) %>% 
+  filter(!grepl("_", Var1)) %>% 
+  arrange(Var1)
+
+```
